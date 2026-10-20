@@ -182,12 +182,16 @@ private fun AnimeWaveApp() {
                             savedIds = if (selected!!.id in savedIds) savedIds - selected!!.id
                                 else savedIds + selected!!.id
                         },
-                        onOpenSource = {
+                        onOpenSource = { sourceQuery ->
                             context.startActivity(
                                 Intent(context, com.animewave.app.source.CartoonsAreaBrowserActivity::class.java)
                                     .putExtra(
                                         com.animewave.app.source.CartoonsAreaBrowserActivity.EXTRA_URL,
                                         "https://www.cartoonsarea.cc/"
+                                    )
+                                    .putExtra(
+                                        com.animewave.app.source.CartoonsAreaBrowserActivity.EXTRA_QUERY,
+                                        sourceQuery
                                     )
                             )
                         }
@@ -335,7 +339,7 @@ private fun AnimeRow(animeItems: List<AnimeItem>, onClick: (AnimeItem) -> Unit) 
 @Composable
 private fun DetailContent(
     item: AnimeItem, episodes: List<AnimeEpisode>, loading: Boolean, saved: Boolean,
-    onBack: () -> Unit, onSave: () -> Unit, onOpenSource: () -> Unit
+    onBack: () -> Unit, onSave: () -> Unit, onOpenSource: (String) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
         Text("‹  Back to AnimeWave", color = Violet, modifier = Modifier.clickable(onClick = onBack).padding(vertical = 5.dp))
@@ -353,15 +357,20 @@ private fun DetailContent(
             }
         }
         if (item.synopsis.isNotBlank()) Text(item.synopsis, color = Color(0xFFD3D5E1), fontSize = 13.sp, lineHeight = 20.sp)
-        Button(onClick = onOpenSource, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Violet)) {
-            Text("Open streaming website")
+        Button(onClick = { onOpenSource(item.title) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Violet)) {
+            Text("Find on CartoonsArea")
         }
         Text("Episodes", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         when {
             loading -> LoadingState()
             episodes.isEmpty() -> Text("Episode listing isn't available for this title yet.", color = Muted, fontSize = 12.sp)
             else -> episodes.forEach { ep ->
-                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp))
+                        .clickable { onOpenSource(item.title + " episode " + (ep.number?.toString() ?: ep.title)) }
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(Modifier.size(42.dp).background(Panel2, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
                         Text(ep.number?.toString() ?: "•", color = Violet, fontWeight = FontWeight.Bold)
                     }
@@ -374,7 +383,7 @@ private fun DetailContent(
                 }
             }
         }
-        Text("Episode metadata comes from Kitsu. The website button opens the source in your browser; in-app playback and downloads need a verified, authorized media URL.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+        Text("Tap an episode to search CartoonsArea inside AnimeWave. Playback and downloads depend on the source offering media you are authorized to access.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
     }
 }
 
