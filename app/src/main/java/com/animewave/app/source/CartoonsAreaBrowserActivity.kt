@@ -1,6 +1,7 @@
 package com.animewave.app.source
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.os.Bundle
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -79,7 +80,37 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                                         override fun shouldOverrideUrlLoading(
                                             view: WebView,
                                             request: WebResourceRequest
-                                        ): Boolean = !isAllowedSourceUrl(request.url.toString())
+                                        ): Boolean {
+                                            val target = request.url.toString()
+                                            if (isDirectMediaUrl(target)) {
+                                                startActivity(
+                                                    Intent(this@CartoonsAreaBrowserActivity, com.animewave.app.PlayerActivity::class.java)
+                                                        .putExtra(com.animewave.app.PlayerActivity.EXTRA_MEDIA_URL, target)
+                                                        .putExtra(com.animewave.app.PlayerActivity.EXTRA_TITLE, initialQuery.ifBlank { "AnimeWave episode" })
+                                                )
+                                                return true
+                                            }
+                                            // Keep ordinary navigation inside the approved source site only.
+                                            return !isAllowedSourceUrl(target)
+                                        }
+
+                                        override fun shouldInterceptRequest(
+                                            view: WebView,
+                                            request: WebResourceRequest
+                                        ): android.webkit.WebResourceResponse? {
+                                            return if (isAdOrTrackerUrl(request.url.toString())) {
+                                                android.webkit.WebResourceResponse(
+                                                    "text/plain",
+                                                    "utf-8",
+                                                    204,
+                                                    "No Content",
+                                                    emptyMap(),
+                                                    java.io.ByteArrayInputStream(ByteArray(0))
+                                                )
+                                            } else {
+                                                super.shouldInterceptRequest(view, request)
+                                            }
+                                        }
 
                                         override fun onPageFinished(view: WebView, url: String) {
                                             super.onPageFinished(view, url)
@@ -185,6 +216,26 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
             uri.scheme == "https" &&
                 (host == "cartoonsarea.cc" || host.endsWith(".cartoonsarea.cc") ||
                  host == "cartoonsarea.com" || host.endsWith(".cartoonsarea.com"))
+        }.getOrDefault(false)
+
+        fun isDirectMediaUrl(value: String): Boolean = runCatching {
+            val uri = android.net.Uri.parse(value)
+            val path = uri.path.orEmpty().lowercase()
+            (uri.scheme == "https" || uri.scheme == "http") &&
+                !uri.host.isNullOrBlank() &&
+                listOf(".mp4", ".m4v", ".webm", ".mkv", ".mp3", ".m3u8", ".mpd").any { path.endsWith(it) }
+        }.getOrDefault(false)
+
+        fun isAdOrTrackerUrl(value: String): Boolean = runCatching {
+            val host = android.net.Uri.parse(value).host?.lowercase() ?: return@runCatching false
+            val blocked = listOf(
+                "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+                "adservice.google.com", "popads.net", "popcash.net", "propellerads.com",
+                "adsterra.com", "exoclick.com", "trafficjunky.com", "adcash.com",
+                "clickadu.com", "hilltopads.net", "onclickalgo.com", "juicyads.com",
+                "taboola.com", "outbrain.com"
+            )
+            blocked.any { host == it || host.endsWith(".$it") }
         }.getOrDefault(false)
     }
 }
