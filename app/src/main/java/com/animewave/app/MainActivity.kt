@@ -558,15 +558,15 @@ private fun DownloadsContent(
                     DownloadManager.STATUS_RUNNING -> "Downloading"
                     DownloadManager.STATUS_PAUSED -> "Paused"
                     DownloadManager.STATUS_SUCCESSFUL -> "Complete"
-                    DownloadManager.STATUS_FAILED -> "Failed (code \${item.reason})"
+                    DownloadManager.STATUS_FAILED -> "Failed (code ${item.reason})"
                     else -> "Checking status"
                 }
                 val progress = if (item.totalBytes > 0) (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
                 Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(15.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
-                        if (item.totalBytes > 0) "\$statusText • \${(progress * 100).toInt()}% • \${formatBytes(item.downloadedBytes)} / \${formatBytes(item.totalBytes)}"
-                        else statusText + if (item.downloadedBytes > 0) " • \${formatBytes(item.downloadedBytes)}" else "",
+                        if (item.totalBytes > 0) "\$statusText • ${(progress * 100).toInt()}% • ${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
+                        else statusText + if (item.downloadedBytes > 0) " • ${formatBytes(item.downloadedBytes)}" else "",
                         color = Muted, fontSize = 11.sp
                     )
                     if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
@@ -591,7 +591,7 @@ private fun DownloadsContent(
 
 private fun formatBytes(bytes: Long): String {
     if (bytes < 0) return "Unknown size"
-    if (bytes < 1024) return "\$bytes B"
+    if (bytes < 1024) return "$bytes B"
     if (bytes < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0)
     if (bytes < 1024L * 1024L * 1024L) return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0))
     return String.format(java.util.Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
