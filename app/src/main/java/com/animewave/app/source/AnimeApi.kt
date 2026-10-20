@@ -5,12 +5,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-data class AnimeItem(
-    val id: String, val title: String, val synopsis: String = "",
-    val posterUrl: String? = null, val coverUrl: String? = null,
-    val episodeCount: Int? = null, val year: String? = null,
-    val subtype: String? = null, val averageRating: String? = null
-)
 data class AnimeEpisode(val id: String, val number: Int?, val title: String, val airdate: String?)
 
 /** Kitsu provides anime metadata/artwork, not playable video streams. */
