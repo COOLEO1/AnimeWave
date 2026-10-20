@@ -50,6 +50,8 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
     private var sourceWebView: WebView? = null
     private var customVideoView: View? = null
     private var customVideoCallback: WebChromeClient.CustomViewCallback? = null
+    private var sourceChromeClient: WebChromeClient? = null
+    private var initialSearchAttempted = false
     private var originalSystemUiVisibility = 0
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -91,7 +93,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                                     settings.domStorageEnabled = true
                                     settings.mediaPlaybackRequiresUserGesture = true
                                     settings.loadsImagesAutomatically = true
-                                    webChromeClient = object : WebChromeClient() {
+                                    sourceChromeClient = object : WebChromeClient() {
                                         override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                                             if (customVideoView != null) {
                                                 callback.onCustomViewHidden()
@@ -130,6 +132,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                                             customVideoCallback = null
                                         }
                                     }
+                                    webChromeClient = sourceChromeClient
                                     setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
                                         startSourceDownload(url, userAgent, contentDisposition, mimeType)
                                     }
@@ -170,8 +173,8 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
 
                                         override fun onPageFinished(view: WebView, url: String) {
                                             super.onPageFinished(view, url)
-                                            if (!initialQuery.isBlank() && !view.getTag(TAG_SEARCH_ATTEMPTED).let { it == true }) {
-                                                view.setTag(TAG_SEARCH_ATTEMPTED, true)
+                                            if (!initialQuery.isBlank() && !initialSearchAttempted) {
+                                                initialSearchAttempted = true
                                                 view.postDelayed({ runSourceSearch(initialQuery) }, 1200)
                                             }
                                         }
@@ -287,7 +290,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
 
     override fun onBackPressed() {
         if (customVideoView != null) {
-            (sourceWebView?.webChromeClient as? WebChromeClient)?.onHideCustomView()
+            sourceChromeClient?.onHideCustomView()
             return
         }
         val webView = sourceWebView
@@ -308,7 +311,6 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
     companion object {
         const val EXTRA_URL = "animewave_source_url"
         const val EXTRA_QUERY = "animewave_source_query"
-        private const val TAG_SEARCH_ATTEMPTED = 0x41574E
 
         fun isAllowedSourceUrl(value: String): Boolean = runCatching {
             val uri = Uri.parse(value)
