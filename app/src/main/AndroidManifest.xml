@@ -10,6 +10,9 @@
             android:name=".source.CartoonsAreaBrowserActivity"
             android:exported="false" />
         <activity
+            android:name=".PlayerActivity"
+            android:exported="false" />
+        <activity
             android:name=".MainActivity"
             android:exported="false" />
         <activity
