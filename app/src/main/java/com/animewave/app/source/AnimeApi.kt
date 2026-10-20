@@ -1,22 +1,68 @@
 package com.animewave.app.source
 
+import android.net.Uri
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
+import java.util.Locale
 
 data class AnimeEpisode(val id: String, val number: Int?, val title: String, val airdate: String?)
 
-/** Kitsu provides anime metadata/artwork, not playable video streams. */
-class AnimeApi {
-    private val base = "https://kitsu.io/api/edge"
-    fun trending(): List<AnimeItem> = list("/anime?sort=-userCount&page%5Blimit%5D=24")
-    fun search(query: String): List<AnimeItem> {
-        val q = URLEncoder.encode(query, "UTF-8")
-        return list("/anime?filter%5Btext%5D=$q&sort=-userCount&page%5Blimit%5D=24")
+/**
+ * Kitsu works without a key. If the user supplies a free TMDB API key/read token in Settings,
+ * TMDB becomes the catalog provider. Both APIs provide metadata/artwork, not playable video.
+ */
+class AnimeApi(private val tmdbKey: String = "") {
+    private val kitsuBase = "https://kitsu.io/api/edge"
+    private val hasTmdb = tmdbKey.isNotBlank()
+
+    fun trending(): List<AnimeItem> = if (hasTmdb) tmdbList(
+        "/discover/tv",
+        mapOf(
+            "with_genres" to "16",
+            "with_origin_country" to "JP",
+            "sort_by" to "popularity.desc",
+            "include_null_first_air_dates" to "false"
+        )
+    ) else kitsuList("/anime?sort=-userCount&page%5Blimit%5D=24")
+
+    fun search(query: String): List<AnimeItem> = if (hasTmdb) {
+        tmdbList("/search/tv", mapOf("query" to query, "include_adult" to "false"))
+            .filter { it.subtype?.contains("animation", ignoreCase = true) == true ||
+                it.title.isNotBlank() }
+    } else {
+        val q = Uri.encode(query)
+        kitsuList("/anime?filter%5Btext%5D=$q&sort=-userCount&page%5Blimit%5D=24")
     }
+
     fun episodes(id: String): List<AnimeEpisode> {
-        val data = request("/anime/$id/episodes?page%5Blimit%5D=20&sort=number").optJSONArray("data") ?: return emptyList()
+        if (id.startsWith("tmdbtv:")) {
+            val tvId = id.removePrefix("tmdbtv:")
+            val show = tmdbRequest("/tv/$tvId")
+            val seasons = show.optJSONArray("seasons")
+            if (seasons != null) {
+                for (i in 0 until seasons.length()) {
+                    val season = seasons.optJSONObject(i) ?: continue
+                    val seasonNumber = season.optInt("season_number", -1)
+                    if (seasonNumber < 0) continue
+                    val data = tmdbRequest("/tv/$tvId/season/$seasonNumber").optJSONArray("episodes")
+                        ?: continue
+                    val parsed = (0 until data.length()).mapNotNull { j ->
+                        val ep = data.optJSONObject(j) ?: return@mapNotNull null
+                        AnimeEpisode(
+                            id = ep.optString("id", j.toString()),
+                            number = if (ep.isNull("episode_number")) null else ep.optInt("episode_number"),
+                            title = ep.optString("name", "Episode"),
+                            airdate = ep.optString("air_date").takeIf { it.isNotBlank() && it != "null" }
+                        )
+                    }
+                    if (parsed.isNotEmpty()) return parsed
+                }
+            }
+            return emptyList()
+        }
+        val data = kitsuRequest("/anime/$id/episodes?page%5Blimit%5D=20&sort=number")
+            .optJSONArray("data") ?: return emptyList()
         return (0 until data.length()).mapNotNull { i ->
             val row = data.optJSONObject(i) ?: return@mapNotNull null
             val a = row.optJSONObject("attributes") ?: JSONObject()
@@ -28,8 +74,9 @@ class AnimeApi {
             )
         }
     }
-    private fun list(path: String): List<AnimeItem> {
-        val data = request(path).optJSONArray("data") ?: return emptyList()
+
+    private fun kitsuList(path: String): List<AnimeItem> {
+        val data = kitsuRequest(path).optJSONArray("data") ?: return emptyList()
         return (0 until data.length()).mapNotNull { i ->
             val row = data.optJSONObject(i) ?: return@mapNotNull null
             val a = row.optJSONObject("attributes") ?: JSONObject()
@@ -37,9 +84,10 @@ class AnimeApi {
             val cover = a.optJSONObject("coverImage")
             val date = a.optString("startDate")
             val rating = a.optString("averageRating").toDoubleOrNull()?.let {
-                String.format(java.util.Locale.US, "%.1f", it / 10.0)
+                String.format(Locale.US, "%.1f", it / 10.0)
             }
-            val title = a.optJSONObject("titles")?.optString("en")?.takeIf { it.isNotBlank() } ?: a.optString("canonicalTitle")
+            val title = a.optJSONObject("titles")?.optString("en")?.takeIf { it.isNotBlank() }
+                ?: a.optString("canonicalTitle")
             AnimeItem(
                 id = row.optString("id"), title = title,
                 synopsis = a.optString("synopsis").takeIf { it.isNotBlank() && it != "null" }.orEmpty(),
@@ -54,19 +102,61 @@ class AnimeApi {
             ).takeIf { it.id.isNotBlank() && it.title.isNotBlank() }
         }
     }
-    private fun request(path: String): JSONObject {
-        val c = URL(base + path).openConnection() as HttpURLConnection
-        c.requestMethod = "GET"
-        c.connectTimeout = 12000
-        c.readTimeout = 15000
-        c.setRequestProperty("Accept", "application/vnd.api+json")
-        c.setRequestProperty("User-Agent", "AnimeWave-Android/0.2")
+
+    private fun tmdbList(path: String, query: Map<String, String>): List<AnimeItem> {
+        val data = tmdbRequest(path, query).optJSONArray("results") ?: return emptyList()
+        return (0 until data.length()).mapNotNull { i ->
+            val row = data.optJSONObject(i) ?: return@mapNotNull null
+            val date = row.optString("first_air_date")
+            val poster = row.optString("poster_path")
+            val backdrop = row.optString("backdrop_path")
+            val rating = row.optDouble("vote_average", 0.0).takeIf { it > 0.0 }
+                ?.let { String.format(Locale.US, "%.1f", it) }
+            val title = row.optString("name").ifBlank { row.optString("original_name") }
+            AnimeItem(
+                id = "tmdbtv:" + row.optString("id"),
+                title = title,
+                synopsis = row.optString("overview").takeIf { it != "null" }.orEmpty(),
+                posterUrl = poster.takeIf { it.startsWith("/") }?.let { "https://image.tmdb.org/t/p/w500$it" },
+                coverUrl = backdrop.takeIf { it.startsWith("/") }?.let { "https://image.tmdb.org/t/p/w780$it" },
+                year = date.takeIf { it.length >= 4 }?.take(4),
+                subtype = "TV anime",
+                averageRating = rating
+            ).takeIf { it.id != "tmdbtv:" && it.title.isNotBlank() }
+        }
+    }
+
+    private fun kitsuRequest(path: String): JSONObject = request(kitsuBase + path, mapOf(
+        "Accept" to "application/vnd.api+json",
+        "User-Agent" to "AnimeWave-Android/0.3"
+    ))
+
+    private fun tmdbRequest(path: String, query: Map<String, String> = emptyMap()): JSONObject {
+        val builder = Uri.parse("https://api.themoviedb.org/3$path").buildUpon()
+            .appendQueryParameter("language", "en-US")
+        query.forEach { (key, value) -> builder.appendQueryParameter(key, value) }
+        val headers = if (tmdbKey.length > 40) mapOf("Authorization" to "Bearer $tmdbKey") else emptyMap()
+        if (tmdbKey.length <= 40) builder.appendQueryParameter("api_key", tmdbKey)
+        return request(builder.build().toString(), headers)
+    }
+
+    private fun request(url: String, headers: Map<String, String> = emptyMap()): JSONObject {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 12000
+        connection.readTimeout = 15000
+        headers.forEach { (key, value) -> connection.setRequestProperty(key, value) }
         return try {
-            val code = c.responseCode
-            val stream = if (code in 200..299) c.inputStream else c.errorStream
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) error("Catalog service returned HTTP $code")
+            if (code !in 200..299) {
+                if (url.contains("api.themoviedb.org")) error("TMDB returned HTTP $code. Check the API key in Settings.")
+                error("Anime catalog returned HTTP $code")
+            }
             JSONObject(body)
-        } finally { c.disconnect() }
+        } finally {
+            connection.disconnect()
+        }
     }
 }
