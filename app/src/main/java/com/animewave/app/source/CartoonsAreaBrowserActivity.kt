@@ -75,11 +75,20 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                                     settings.domStorageEnabled = true
                                     settings.mediaPlaybackRequiresUserGesture = true
                                     webChromeClient = WebChromeClient()
+                                    var initialSearchAttempted = false
                                     webViewClient = object : WebViewClient() {
                                         override fun shouldOverrideUrlLoading(
                                             view: WebView,
                                             request: WebResourceRequest
                                         ): Boolean = !isAllowedSourceUrl(request.url.toString())
+
+                                        override fun onPageFinished(view: WebView, url: String) {
+                                            super.onPageFinished(view, url)
+                                            if (!initialSearchAttempted && initialQuery.isNotBlank()) {
+                                                initialSearchAttempted = true
+                                                view.postDelayed({ runSourceSearch(initialQuery) }, 900)
+                                            }
+                                        }
                                     }
                                     loadUrl(startUrl)
                                 }
