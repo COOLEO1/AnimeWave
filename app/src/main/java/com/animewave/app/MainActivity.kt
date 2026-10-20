@@ -1,5 +1,7 @@
 package com.animewave.app
 
+import android.app.DownloadManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -245,8 +247,16 @@ private fun AnimeWaveApp() {
                         else AnimeRow(saved, ::openDetails)
                     }
                     "Downloads" -> {
-                        SectionHeading("OFFLINE", "Downloads")
-                        EmptyState("No downloads yet", "Episode downloads need an authorized direct media source. AnimeWave is connected to live catalog metadata first.")
+                        DownloadsContent(
+                            preferences = preferences,
+                            onPlay = { uri, title ->
+                                context.startActivity(
+                                    Intent(context, PlayerActivity::class.java)
+                                        .putExtra(PlayerActivity.EXTRA_MEDIA_URL, uri.toString())
+                                        .putExtra(PlayerActivity.EXTRA_TITLE, title)
+                                )
+                            }
+                        )
                     }
                     else -> {
                         if (tab == "Home" && catalog.isNotEmpty()) {
@@ -456,4 +466,133 @@ private fun SettingsContent(
         Text("TMDB provides catalog metadata and artwork, not video streams. Kitsu is the automatic no-key option. Neither provider grants AnimeWave access to CartoonsArea's protected media.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
         Text("AnimeWave • built for anime discovery", color = Muted, fontSize = 10.sp)
     }
+}
+
+
+private data class AnimeWaveDownload(
+    val id: Long, val title: String, val status: Int,
+    val downloadedBytes: Long, val totalBytes: Long, val reason: Int
+)
+
+@Composable
+private fun DownloadsContent(
+    preferences: android.content.SharedPreferences,
+    onPlay: (Uri, String) -> Unit
+) {
+    val context = LocalContext.current
+    var storageChoice by remember { mutableStateOf(preferences.getString("download_storage", "phone") ?: "phone") }
+    var refreshToken by remember { mutableIntStateOf(0) }
+    var downloads by remember { mutableStateOf<List<AnimeWaveDownload>>(emptyList()) }
+    var loadingDownloads by remember { mutableStateOf(false) }
+
+    LaunchedEffect(refreshToken) {
+        loadingDownloads = true
+        downloads = withContext(Dispatchers.IO) {
+            runCatching {
+                val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                val mask = DownloadManager.STATUS_PENDING or DownloadManager.STATUS_RUNNING or
+                    DownloadManager.STATUS_PAUSED or DownloadManager.STATUS_SUCCESSFUL or DownloadManager.STATUS_FAILED
+                val found = mutableListOf<AnimeWaveDownload>()
+                manager.query(DownloadManager.Query().setFilterByStatus(mask))?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        fun longColumn(name: String): Long {
+                            val index = cursor.getColumnIndex(name)
+                            return if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else -1L
+                        }
+                        fun intColumn(name: String): Int {
+                            val index = cursor.getColumnIndex(name)
+                            return if (index >= 0 && !cursor.isNull(index)) cursor.getInt(index) else 0
+                        }
+                        val titleIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TITLE)
+                        val title = if (titleIndex >= 0) cursor.getString(titleIndex) ?: "Anime download" else "Anime download"
+                        found += AnimeWaveDownload(
+                            longColumn(DownloadManager.COLUMN_ID), title,
+                            intColumn(DownloadManager.COLUMN_STATUS),
+                            longColumn(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
+                            longColumn(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
+                            intColumn(DownloadManager.COLUMN_REASON)
+                        )
+                    }
+                }
+                found.sortedByDescending { it.id }
+            }.getOrDefault(emptyList())
+        }
+        loadingDownloads = false
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionHeading("OFFLINE LIBRARY", "Downloads")
+        Text("Choose where new episodes are saved.", color = Muted, fontSize = 12.sp)
+        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(storageChoice == "phone", onClick = {
+                    storageChoice = "phone"; preferences.edit().putString("download_storage", "phone").apply()
+                })
+                Column(Modifier.weight(1f)) {
+                    Text("Phone Downloads folder", fontWeight = FontWeight.SemiBold)
+                    Text("Visible in your phone's Files app", color = Muted, fontSize = 11.sp)
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(storageChoice == "app", onClick = {
+                    storageChoice = "app"; preferences.edit().putString("download_storage", "app").apply()
+                })
+                Column(Modifier.weight(1f)) {
+                    Text("Inside AnimeWave", fontWeight = FontWeight.SemiBold)
+                    Text("App-specific storage; removed if you uninstall the app", color = Muted, fontSize = 11.sp)
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Download activity", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+            TextButton(onClick = { refreshToken++ }) { Text("Refresh") }
+        }
+        if (loadingDownloads) {
+            LinearProgressIndicator(Modifier.fillMaxWidth(), color = Violet)
+        } else if (downloads.isEmpty()) {
+            EmptyState("Nothing downloaded yet", "Start a supported download from a source page or the player. Your downloads will appear here.")
+        } else {
+            downloads.forEach { item ->
+                val statusText = when (item.status) {
+                    DownloadManager.STATUS_PENDING -> "Queued"
+                    DownloadManager.STATUS_RUNNING -> "Downloading"
+                    DownloadManager.STATUS_PAUSED -> "Paused"
+                    DownloadManager.STATUS_SUCCESSFUL -> "Complete"
+                    DownloadManager.STATUS_FAILED -> "Failed (code \${item.reason})"
+                    else -> "Checking status"
+                }
+                val progress = if (item.totalBytes > 0) (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
+                Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(15.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (item.totalBytes > 0) "\$statusText • \${(progress * 100).toInt()}% • \${formatBytes(item.downloadedBytes)} / \${formatBytes(item.totalBytes)}"
+                        else statusText + if (item.downloadedBytes > 0) " • \${formatBytes(item.downloadedBytes)}" else "",
+                        color = Muted, fontSize = 11.sp
+                    )
+                    if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
+                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Violet)
+                    }
+                    if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
+                        Button(onClick = {
+                            runCatching {
+                                val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                                manager.getUriForDownloadedFile(item.id)?.let { onPlay(it, item.title) }
+                            }
+                        }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Violet)) {
+                            Text("Watch offline")
+                        }
+                    }
+                }
+            }
+        }
+        Text("Notifications depend on Android notification settings. Only direct, accessible media files can be downloaded and played here.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 0) return "Unknown size"
+    if (bytes < 1024) return "\$bytes B"
+    if (bytes < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0)
+    if (bytes < 1024L * 1024L * 1024L) return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0))
+    return String.format(java.util.Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
 }
