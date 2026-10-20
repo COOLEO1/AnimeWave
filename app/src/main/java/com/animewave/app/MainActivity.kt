@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +31,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,7 +49,6 @@ private val Panel2 = Color(0xFF202334)
 private val Violet = Color(0xFF9B72FF)
 private val Pink = Color(0xFFFF6DAE)
 private val Muted = Color(0xFFAAAFC3)
-private val api = AnimeApi()
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,6 +70,10 @@ private fun AnimeWaveApp() {
     var savedIds by remember { mutableStateOf(setOf<String>()) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val preferences = remember { context.getSharedPreferences("animewave_settings", android.content.Context.MODE_PRIVATE) }
+    var tmdbKey by remember { mutableStateOf(preferences.getString("tmdb_api_key", "").orEmpty()) }
+    var draftTmdbKey by remember(tmdbKey) { mutableStateOf(tmdbKey) }
+    val api = remember(tmdbKey) { AnimeApi(tmdbKey.trim()) }
 
     fun loadCatalog(search: String = "") {
         scope.launch {
@@ -111,7 +116,8 @@ private fun AnimeWaveApp() {
                         Triple("Home", Icons.Default.Home, "Home"),
                         Triple("Discover", Icons.Default.Explore, "Discover"),
                         Triple("Saved", Icons.Default.Favorite, "Saved"),
-                        Triple("Downloads", Icons.Default.Download, "Downloads")
+                        Triple("Downloads", Icons.Default.Download, "Downloads"),
+                        Triple("Settings", Icons.Default.Settings, "Settings")
                     ).forEach { (label, icon, route) ->
                         NavigationBarItem(
                             selected = tab == route,
@@ -181,6 +187,47 @@ private fun AnimeWaveApp() {
                         }
                     )
                 } else when (tab) {
+                    "Settings" -> SettingsContent(
+                        tmdbKey = draftTmdbKey,
+                        onKeyChange = { draftTmdbKey = it },
+                        onSave = {
+                            val cleaned = draftTmdbKey.trim()
+                            preferences.edit().putString("tmdb_api_key", cleaned).apply()
+                            tmdbKey = cleaned
+                            tab = "Home"
+                            selected = null
+                            scope.launch {
+                                loading = true
+                                error = null
+                                try {
+                                    catalog = withContext(Dispatchers.IO) { AnimeApi(cleaned).trending() }
+                                } catch (e: Exception) {
+                                    error = e.message ?: "Could not load the anime catalog."
+                                } finally {
+                                    loading = false
+                                }
+                            }
+                        },
+                        onGetKey = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.themoviedb.org/settings/api")))
+                        },
+                        onClearKey = {
+                            draftTmdbKey = ""
+                            preferences.edit().remove("tmdb_api_key").apply()
+                            tmdbKey = ""
+                            scope.launch {
+                                loading = true
+                                error = null
+                                try {
+                                    catalog = withContext(Dispatchers.IO) { AnimeApi().trending() }
+                                } catch (e: Exception) {
+                                    error = e.message ?: "Could not load the anime catalog."
+                                } finally {
+                                    loading = false
+                                }
+                            }
+                        }
+                    )
                     "Saved" -> {
                         SectionHeading("YOUR WATCHLIST", "Saved anime")
                         val saved = catalog.filter { it.id in savedIds }
@@ -347,5 +394,51 @@ private fun EmptyState(title: String, subtitle: String) {
         Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp, textAlign = TextAlign.Center)
         Spacer(Modifier.height(6.dp))
         Text(subtitle, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
+    }
+}
+
+
+@Composable
+private fun SettingsContent(
+    tmdbKey: String,
+    onKeyChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onGetKey: () -> Unit,
+    onClearKey: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Settings", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+        Text("CATALOG PROVIDERS", color = Violet, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+        Text("AnimeWave works without an API key using Kitsu. Add your free TMDB API key or read access token to switch to TMDB anime-series metadata and artwork.", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
+        OutlinedTextField(
+            value = tmdbKey,
+            onValueChange = onKeyChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("TMDB API key or read token") },
+            placeholder = { Text("Paste your free TMDB credential") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedBorderColor = Color(0xFF303246),
+                focusedBorderColor = Violet,
+                unfocusedContainerColor = Panel,
+                focusedContainerColor = Panel
+            )
+        )
+        Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Violet)) {
+            Text("Save key and refresh catalog")
+        }
+        OutlinedButton(onClick = onGetKey, modifier = Modifier.fillMaxWidth()) {
+            Text("Get a free TMDB API key")
+        }
+        TextButton(onClick = onClearKey, modifier = Modifier.fillMaxWidth()) {
+            Text("Clear key and use Kitsu instead", color = Pink)
+        }
+        Divider(color = Color(0xFF303246))
+        Text("YOUR PRIVACY", fontSize = 10.sp, letterSpacing = 2.sp, color = Violet, fontWeight = FontWeight.Bold)
+        Text("Your API key is saved in this app's local preferences on this device. Catalog searches are sent to the provider you choose. Never paste a private or paid account password here.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        Text("TMDB provides catalog metadata and artwork, not video streams. Kitsu is the automatic no-key option. Neither provider grants AnimeWave access to CartoonsArea's protected media.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        Text("AnimeWave • built for anime discovery", color = Muted, fontSize = 10.sp)
     }
 }
