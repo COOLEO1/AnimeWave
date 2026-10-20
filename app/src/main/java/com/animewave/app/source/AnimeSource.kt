@@ -11,5 +11,9 @@ data class AnimeItem(
     val title: String,
     val synopsis: String = "",
     val posterUrl: String? = null,
-    val episodeCount: Int? = null
+    val coverUrl: String? = null,
+    val episodeCount: Int? = null,
+    val year: String? = null,
+    val subtype: String? = null,
+    val averageRating: String? = null
 )
