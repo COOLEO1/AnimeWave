@@ -1,7 +1,10 @@
 package com.animewave.app.source
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.app.DownloadManager
+import android.content.pm.PackageManager
+import android.os.Build
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -20,6 +23,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -52,6 +56,24 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
     private var customVideoCallback: WebChromeClient.CustomViewCallback? = null
     private var sourceChromeClient: WebChromeClient? = null
     private var initialSearchAttempted = false
+    private var pendingDownload: PendingDownload? = null
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val pending = pendingDownload
+        pendingDownload = null
+        if (!granted) {
+            Toast.makeText(this, "Notifications are off; the download will still be attempted.", Toast.LENGTH_LONG).show()
+        }
+        pending?.let { enqueueSourceDownload(it.url, it.userAgent, it.contentDisposition, it.mimeType) }
+    }
+
+    private data class PendingDownload(
+        val url: String,
+        val userAgent: String?,
+        val contentDisposition: String?,
+        val mimeType: String?
+    )
     private var originalSystemUiVisibility = 0
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -260,6 +282,17 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
     }
 
     private fun startSourceDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingDownload = PendingDownload(url, userAgent, contentDisposition, mimeType)
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        enqueueSourceDownload(url, userAgent, contentDisposition, mimeType)
+    }
+
+    private fun enqueueSourceDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
         runCatching {
             val uri = Uri.parse(url)
             require(uri.scheme == "https" || uri.scheme == "http") { "Unsupported download URL" }
