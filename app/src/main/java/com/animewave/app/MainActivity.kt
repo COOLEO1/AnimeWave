@@ -183,7 +183,13 @@ private fun AnimeWaveApp() {
                                 else savedIds + selected!!.id
                         },
                         onOpenSource = {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://cartoonsarea.cc")))
+                            context.startActivity(
+                                Intent(context, com.animewave.app.source.CartoonsAreaBrowserActivity::class.java)
+                                    .putExtra(
+                                        com.animewave.app.source.CartoonsAreaBrowserActivity.EXTRA_URL,
+                                        "https://www.cartoonsarea.cc/"
+                                    )
+                            )
                         }
                     )
                 } else when (tab) {
