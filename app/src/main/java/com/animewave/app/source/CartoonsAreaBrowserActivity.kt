@@ -302,11 +302,16 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                 .ifBlank { "anime_download" }
             val request = DownloadManager.Request(uri)
                 .setTitle(guessedName)
-                .setDescription("Downloading with AnimeWave")
+                .setDescription("AnimeWave episode download")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(false)
-                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, guessedName)
+            val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
+            if (preferences.getString("download_storage", "phone") == "app") {
+                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, guessedName)
+            } else {
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$guessedName")
+            }
             if (!userAgent.isNullOrBlank()) request.addRequestHeader("User-Agent", userAgent)
             CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let {
                 request.addRequestHeader("Cookie", it)
@@ -315,7 +320,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
             if (!mimeType.isNullOrBlank()) request.setMimeType(mimeType)
             val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             manager.enqueue(request)
-            Toast.makeText(this, "Download started. Check your Downloads folder.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
         }.onFailure {
             Toast.makeText(this, "Download couldn't start: ${it.message ?: "unsupported link"}", Toast.LENGTH_LONG).show()
         }
