@@ -107,6 +107,11 @@ class AnimeApi(private val tmdbKey: String = "") {
         val data = tmdbRequest(path, query).optJSONArray("results") ?: return emptyList()
         return (0 until data.length()).mapNotNull { i ->
             val row = data.optJSONObject(i) ?: return@mapNotNull null
+            if (path == "/search/tv") {
+                if (row.optString("original_language") != "ja") return@mapNotNull null
+                val genres = row.optJSONArray("genre_ids")
+                if (genres == null || (0 until genres.length()).none { genres.optInt(it) == 16 }) return@mapNotNull null
+            }
             val date = row.optString("first_air_date")
             val poster = row.optString("poster_path")
             val backdrop = row.optString("backdrop_path")
