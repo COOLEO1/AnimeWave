@@ -146,11 +146,9 @@ private fun AnimeWaveApp() {
                         ).padding(22.dp)
                     ) {
                         Column(Modifier.align(Alignment.CenterStart).fillMaxWidth(0.8f)) {
-                            Text("THE UNIVERSE
-OF ANIME", fontSize = 10.sp, color = Color(0xFFE1C8FF), letterSpacing = 2.sp)
+                            Text("THE UNIVERSE\nOF ANIME", fontSize = 10.sp, color = Color(0xFFE1C8FF), letterSpacing = 2.sp)
                             Spacer(Modifier.height(10.dp))
-                            Text("Find your
-next world.", fontSize = 29.sp, lineHeight = 33.sp, fontWeight = FontWeight.ExtraBold)
+                            Text("Find your\nnext world.", fontSize = 29.sp, lineHeight = 33.sp, fontWeight = FontWeight.ExtraBold)
                             Spacer(Modifier.height(13.dp))
                             Text("Discover stories worth staying up for.", fontSize = 12.sp, color = Color(0xFFE2D8ED))
                         }
