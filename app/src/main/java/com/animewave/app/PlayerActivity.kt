@@ -1,12 +1,16 @@
 package com.animewave.app
 
+import android.Manifest
 import android.app.DownloadManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,13 +40,25 @@ import java.util.Locale
  */
 class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
+    private var pendingDownload: Pair<Uri, String>? = null
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val pending = pendingDownload
+        pendingDownload = null
+        if (!granted) Toast.makeText(this, "Notifications are off; the download will still be attempted.", Toast.LENGTH_LONG).show()
+        pending?.let { enqueueDownloadNow(it.first, it.second) }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val rawUrl = intent.getStringExtra(EXTRA_MEDIA_URL).orEmpty()
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "AnimeWave Player" }
         val uri = runCatching { Uri.parse(rawUrl) }.getOrNull()
-        if (uri == null || (uri.scheme != "https" && uri.scheme != "http") || uri.host.isNullOrBlank()) {
+        if (uri == null || !(
+                (uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank() ||
+                    uri.scheme == "content" || uri.scheme == "file"
+            )) {
             Toast.makeText(this, "This is not a valid direct video URL.", Toast.LENGTH_LONG).show()
             finish()
             return
@@ -81,6 +97,7 @@ class PlayerActivity : ComponentActivity() {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             Button(
                                 modifier = Modifier.weight(1f),
+                                enabled = uri.scheme == "https" || uri.scheme == "http",
                                 onClick = { enqueueDownload(uri, title) }
                             ) { Text("Download episode") }
                             Button(
@@ -100,17 +117,35 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun enqueueDownload(uri: Uri, title: String) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingDownload = uri to title
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        enqueueDownloadNow(uri, title)
+    }
+
+    private fun enqueueDownloadNow(uri: Uri, title: String) {
         runCatching {
+            require(uri.scheme == "https" || uri.scheme == "http") { "Only direct HTTP(S) media links can be downloaded" }
+            val fileName = safeFileName(title, uri)
             val request = DownloadManager.Request(uri)
                 .setTitle(title)
-                .setDescription("Downloading with AnimeWave")
+                .setDescription("AnimeWave episode download")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(false)
-                .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, safeFileName(title, uri))
+            val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
+            if (preferences.getString("download_storage", "phone") == "app") {
+                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName)
+            } else {
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$fileName")
+            }
             val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             manager.enqueue(request)
-            Toast.makeText(this, "Download started. Check Android notifications.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
         }.onFailure {
             Toast.makeText(this, "Could not start download: ${it.message ?: "unsupported source"}", Toast.LENGTH_LONG).show()
         }
