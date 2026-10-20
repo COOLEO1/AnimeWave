@@ -261,9 +261,9 @@ private fun SectionHeading(eyebrow: String, title: String) {
 }
 
 @Composable
-private fun AnimeRow(items: List<AnimeItem>, onClick: (AnimeItem) -> Unit) {
+private fun AnimeRow(animeItems: List<AnimeItem>, onClick: (AnimeItem) -> Unit) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(13.dp), contentPadding = PaddingValues(end = 4.dp)) {
-        items(items, key = { it.id }) { item ->
+        items(animeItems, key = { it.id }) { item ->
             Column(Modifier.width(148.dp).clickable { onClick(item) }) {
                 Box(Modifier.fillMaxWidth().height(205.dp).clip(RoundedCornerShape(16.dp)).background(Panel2)) {
                     AsyncImage(model = item.posterUrl, contentDescription = item.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
