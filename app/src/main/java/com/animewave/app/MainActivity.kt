@@ -42,6 +42,7 @@ import com.animewave.app.source.AnimeApi
 import com.animewave.app.source.AnimeEpisode
 import com.animewave.app.source.AnimeItem
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -485,6 +486,17 @@ private fun DownloadsContent(
     var downloads by remember { mutableStateOf<List<AnimeWaveDownload>>(emptyList()) }
     var loadingDownloads by remember { mutableStateOf(false) }
 
+    LaunchedEffect(downloads) {
+        if (downloads.any {
+                it.status == DownloadManager.STATUS_PENDING ||
+                it.status == DownloadManager.STATUS_RUNNING ||
+                it.status == DownloadManager.STATUS_PAUSED
+            }) {
+            delay(1000)
+            refreshToken++
+        }
+    }
+
     LaunchedEffect(refreshToken) {
         loadingDownloads = true
         downloads = withContext(Dispatchers.IO) {
@@ -572,14 +584,43 @@ private fun DownloadsContent(
                     if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
                         LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Violet)
                     }
-                    if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
-                        Button(onClick = {
-                            runCatching {
-                                val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                                manager.getUriForDownloadedFile(item.id)?.let { onPlay(it, item.title) }
-                            }
-                        }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Violet)) {
-                            Text("Watch offline")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
+                            Button(
+                                onClick = {
+                                    runCatching {
+                                        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                                        manager.getUriForDownloadedFile(item.id)?.let { onPlay(it, item.title) }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Violet)
+                            ) { Text("Watch offline") }
+                            OutlinedButton(onClick = {
+                                runCatching {
+                                    (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.id)
+                                }
+                                refreshToken++
+                            }) { Text("Remove") }
+                        } else if (
+                            item.status == DownloadManager.STATUS_PENDING ||
+                            item.status == DownloadManager.STATUS_RUNNING ||
+                            item.status == DownloadManager.STATUS_PAUSED ||
+                            item.status == DownloadManager.STATUS_FAILED
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.id)
+                                    }
+                                    refreshToken++
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text(if (item.status == DownloadManager.STATUS_FAILED) "Dismiss failed download" else "Cancel download") }
                         }
                     }
                 }
