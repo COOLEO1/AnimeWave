@@ -167,7 +167,7 @@ internal fun DownloadsContent(
                 Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(15.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
-                        if (item.totalBytes > 0) "\$statusText • ${(progress * 100).toInt()}% • ${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
+                        if (item.totalBytes > 0) "$statusText • ${(progress * 100).toInt()}% • ${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
                         else statusText + if (item.downloadedBytes > 0) " • ${formatBytes(item.downloadedBytes)}" else "",
                         color = Muted, fontSize = 11.sp
                     )
@@ -242,7 +242,7 @@ internal fun DownloadsContent(
 }
 
 private fun seasonFolder(title: String): String {
-    val match = Regex("(?i)(?:season[ ._-]*|\\\\bs)(\\\\d{1,2})(?:[ ._-]*episode[ ._-]*\\\\d+|[ ._-]*e\\\\d+)?").find(title)
+    val match = Regex("(?i)(?:season[ ._-]*|\\bs)(\\d{1,2})(?:[ ._-]*episode[ ._-]*\\d+|[ ._-]*e\\d+)?").find(title)
     val number = match?.groupValues?.getOrNull(1)?.toIntOrNull()
     return if (number == null) "Season unknown" else "Season " + number.toString().padStart(2, '0')
 }
