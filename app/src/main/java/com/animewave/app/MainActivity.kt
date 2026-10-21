@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AnimeWaveApp() {
     var tab by remember { mutableStateOf("Home") }
@@ -154,8 +156,15 @@ private fun AnimeWaveApp() {
                 }
             }
         ) { padding ->
+            PullToRefreshBox(
+                isRefreshing = loading && catalog.isNotEmpty(),
+                onRefresh = {
+                    if (tab == "Home" || tab == "Discover") loadCatalog(query.trim())
+                },
+                modifier = Modifier.fillMaxSize().padding(padding)
+            ) {
             Column(
-                Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                     .padding(horizontal = 18.dp)
             ) {
                 Spacer(Modifier.height(18.dp))
@@ -320,6 +329,7 @@ private fun AnimeWaveApp() {
                     }
                 }
                 Spacer(Modifier.height(26.dp))
+            }
             }
         }
     }
