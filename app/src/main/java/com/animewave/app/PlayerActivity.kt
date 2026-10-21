@@ -50,6 +50,15 @@ class PlayerActivity : ComponentActivity() {
         pending?.let { enqueueDownloadNow(it.first, it.second) }
     }
 
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val pending = pendingDownload
+        pendingDownload = null
+        if (!granted) Toast.makeText(this, "Storage permission denied; saving inside AnimeWave instead.", Toast.LENGTH_LONG).show()
+        pending?.let { enqueueDownloadNow(it.first, it.second) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val rawUrl = intent.getStringExtra(EXTRA_MEDIA_URL).orEmpty()
@@ -124,30 +133,25 @@ class PlayerActivity : ComponentActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
+        if (com.animewave.app.downloads.DownloadHelper.needsLegacyStoragePermission(this)) {
+            pendingDownload = uri to title
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
         enqueueDownloadNow(uri, title)
     }
 
     private fun enqueueDownloadNow(uri: Uri, title: String) {
-        runCatching {
-            require(uri.scheme == "https" || uri.scheme == "http") { "Only direct HTTP(S) media links can be downloaded" }
-            val fileName = safeFileName(title, uri)
-            val request = DownloadManager.Request(uri)
-                .setTitle(title)
-                .setDescription("AnimeWave episode download")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(false)
-            val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
-            if (preferences.getString("download_storage", "phone") == "app") {
-                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName)
-            } else {
-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$fileName")
-            }
-            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            manager.enqueue(request)
-            Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
-        }.onFailure {
-            Toast.makeText(this, "Could not start download: ${it.message ?: "unsupported source"}", Toast.LENGTH_LONG).show()
+        val fileName = safeFileName(title, uri).replace('_', ' ')
+        when (val result = com.animewave.app.downloads.DownloadHelper.enqueue(
+            this, uri.toString(), null, null, null, null, fileName
+        )) {
+            is com.animewave.app.downloads.DownloadHelper.Result.Started ->
+                Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
+            is com.animewave.app.downloads.DownloadHelper.Result.Duplicate ->
+                Toast.makeText(this, "Already downloading: ${result.name}", Toast.LENGTH_LONG).show()
+            is com.animewave.app.downloads.DownloadHelper.Result.Error ->
+                Toast.makeText(this, "Could not start download: ${result.message}", Toast.LENGTH_LONG).show()
         }
     }
 
