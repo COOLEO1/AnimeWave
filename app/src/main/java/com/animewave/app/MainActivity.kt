@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,12 +69,13 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AnimeWaveApp() {
-    var tab by remember { mutableStateOf("Home") }
-    var query by remember { mutableStateOf("") }
+    var tab by rememberSaveable { mutableStateOf("Home") }
+    var query by rememberSaveable { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<AnimeItem>>(emptyList()) }
     var catalogPage by remember { mutableIntStateOf(1) }
     var hasMoreCatalog by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<AnimeItem?>(null) }
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var episodes by remember { mutableStateOf<List<AnimeEpisode>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var detailLoading by remember { mutableStateOf(false) }
@@ -109,13 +111,12 @@ private fun AnimeWaveApp() {
     }
     fun openDetails(item: AnimeItem) {
         selected = item
-        detailLoading = true
-        scope.launch {
-            episodes = withContext(Dispatchers.IO) {
-                runCatching { api.episodes(item.id) }.getOrDefault(emptyList())
-            }
-            detailLoading = false
-        }
+        selectedId = item.id
+    }
+    fun closeDetails() {
+        selected = null
+        selectedId = null
+        episodes = emptyList()
     }
 
     LaunchedEffect(Unit) {
@@ -123,7 +124,23 @@ private fun AnimeWaveApp() {
         loadCatalog()
     }
 
-    BackHandler(enabled = selected != null) { selected = null }
+    LaunchedEffect(selectedId, catalog) {
+        val id = selectedId
+        if (id != null && selected?.id != id) {
+            selected = catalog.firstOrNull { it.id == id }
+        }
+    }
+
+    LaunchedEffect(selected?.id, api) {
+        val item = selected ?: return@LaunchedEffect
+        detailLoading = true
+        episodes = withContext(Dispatchers.IO) {
+            runCatching { api.episodes(item.id) }.getOrDefault(emptyList())
+        }
+        detailLoading = false
+    }
+
+    BackHandler(enabled = selected != null || selectedId != null) { closeDetails() }
 
     MaterialTheme(colorScheme = darkColorScheme(
         background = Night, surface = Panel, surfaceVariant = Panel2,
@@ -143,7 +160,7 @@ private fun AnimeWaveApp() {
                     ).forEach { (label, icon, route) ->
                         NavigationBarItem(
                             selected = tab == route,
-                            onClick = { tab = route; selected = null },
+                            onClick = { tab = route; closeDetails() },
                             icon = { Icon(icon, contentDescription = label) },
                             label = { Text(label, fontSize = 10.sp) },
                             colors = NavigationBarItemDefaults.colors(
@@ -206,7 +223,7 @@ private fun AnimeWaveApp() {
                     DetailContent(
                         item = selected!!, episodes = episodes, loading = detailLoading,
                         saved = selected!!.id in savedIds,
-                        onBack = { selected = null },
+                        onBack = { closeDetails() },
                         onSave = {
                             val id = selected!!.id
                             val updated = if (id in savedIds) savedIds - id else savedIds + id
@@ -236,7 +253,7 @@ private fun AnimeWaveApp() {
                             preferences.edit().putString("tmdb_api_key", cleaned).apply()
                             tmdbKey = cleaned
                             tab = "Home"
-                            selected = null
+                            closeDetails()
                             scope.launch {
                                 loading = true
                                 error = null
