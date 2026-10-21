@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.animewave.app.downloads.DownloadHelper
+import com.animewave.app.downloads.TorrentDownloadsContent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -89,7 +90,9 @@ internal fun DownloadsContent(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionHeading("OFFLINE LIBRARY", "Downloads")
+        TorrentDownloadsContent(onPlay = onPlay)
+        HorizontalDivider(color = Muted.copy(alpha = 0.25f))
+        SectionHeading("OFFLINE LIBRARY", "Direct downloads")
         Text("Choose where new episodes are saved.", color = Muted, fontSize = 12.sp)
         Row(
             modifier = Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
