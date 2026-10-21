@@ -151,7 +151,10 @@ internal fun DownloadsContent(
                             }
                             Text(if (expanded) "⌄" else "›", fontSize = 22.sp, color = Muted)
                         }
-                        if (expanded) episodes.forEach { item ->
+                        if (expanded) episodes.groupBy { seasonFolder(it.title) }.toSortedMap().forEach { (seasonName, seasonItems) ->
+                            Column(Modifier.fillMaxWidth().padding(start = 8.dp, top = 8.dp)) {
+                                Text(seasonName, color = Violet, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                seasonItems.forEach { item ->
                 val statusText = when (item.status) {
                     DownloadManager.STATUS_PENDING -> "Queued"
                     DownloadManager.STATUS_RUNNING -> "Downloading"
@@ -228,12 +231,20 @@ internal fun DownloadsContent(
                         }
                     }
                 }
+                                }
+                            }
                         }
                     }
                 }
         }
         Text("Notifications depend on Android notification settings. Only direct, accessible media files can be downloaded and played here.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
     }
+}
+
+private fun seasonFolder(title: String): String {
+    val match = Regex("(?i)(?:season[ ._-]*|\\\\bs)(\\\\d{1,2})(?:[ ._-]*episode[ ._-]*\\\\d+|[ ._-]*e\\\\d+)?").find(title)
+    val number = match?.groupValues?.getOrNull(1)?.toIntOrNull()
+    return if (number == null) "Season unknown" else "Season " + number.toString().padStart(2, '0')
 }
 
 private fun formatBytes(bytes: Long): String {
