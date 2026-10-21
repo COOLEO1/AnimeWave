@@ -141,9 +141,11 @@ internal fun TorrentDownloadsContent(onPlay: (Uri, String) -> Unit) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (item.complete) {
                                 Text("Ready to watch", color = Violet, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                            } else if (item.paused || item.waitingForWifi) {
+                            } else if (item.waitingForWifi && !item.paused) {
+                                Text("Connect to Wi-Fi to continue", color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                            } else if (item.paused) {
                                 Button(onClick = { TorrentEngineService.resume(context, item.hash) }, modifier = Modifier.weight(1f)) {
-                                    Text(if (item.waitingForWifi) "Resume on current network" else "Resume")
+                                    Text("Resume")
                                 }
                             } else {
                                 OutlinedButton(onClick = { TorrentEngineService.pause(context, item.hash) }, modifier = Modifier.weight(1f)) {
@@ -175,9 +177,6 @@ internal fun TorrentDownloadsContent(onPlay: (Uri, String) -> Unit) {
                     Button(onClick = { onPlay(Uri.fromFile(file), file.name) }) { Text("Play") }
                 }
             }
-        }
-        TextButton(onClick = { TorrentEngineService.refresh(context) }, modifier = Modifier.fillMaxWidth()) {
-            Text("Refresh torrent engine")
         }
     }
 }
