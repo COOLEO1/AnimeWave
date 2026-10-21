@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -110,7 +111,7 @@ internal fun EmptyState(title: String, subtitle: String) {
 
 
 @Composable
-private fun SettingsContent(
+internal fun SettingsContent(
     tmdbKey: String,
     onKeyChange: (String) -> Unit,
     onSave: () -> Unit,
