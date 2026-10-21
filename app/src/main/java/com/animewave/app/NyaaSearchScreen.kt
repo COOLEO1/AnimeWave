@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.animewave.app.nyaa.NyaaRelease
+import com.animewave.app.downloads.TorrentEngineService
 import com.animewave.app.nyaa.NyaaRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -142,7 +143,7 @@ internal fun NyaaSearchScreen() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(release.title, fontWeight = FontWeight.SemiBold)
-                    Text("Only continue for content you are authorized to download. The torrent client controls transfer progress.", color = Muted, fontSize = 12.sp)
+                    Text("Only download content you are authorized to access. AnimeWave will download directly and show progress in Downloads.", color = Muted, fontSize = 12.sp)
                     if (release.magnetUri() == null) {
                         Text("This feed did not provide a usable info hash. Open the release page to inspect available options.", color = Color(0xFFFFD28A), fontSize = 12.sp)
                     }
@@ -152,8 +153,18 @@ internal fun NyaaSearchScreen() {
                 Button(onClick = {
                     val magnet = release.magnetUri()
                     selected = null
-                    if (magnet != null) openExternal(context, magnet) else openExternal(context, release.pageUrl)
-                }) { Text(if (release.magnetUri() != null) "Open torrent client" else "Open release page") }
+                    if (magnet != null) {
+                        runCatching { TorrentEngineService.add(context, magnet, release.title) }
+                            .onSuccess {
+                                android.widget.Toast.makeText(context, "Starting torrent download in AnimeWave", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                            .onFailure {
+                                android.widget.Toast.makeText(context, it.message ?: "Could not start torrent download", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                    } else {
+                        openExternal(context, release.pageUrl)
+                    }
+                }) { Text(if (release.magnetUri() != null) "Download in AnimeWave" else "Open release page") }
             },
             dismissButton = { TextButton(onClick = { selected = null }) { Text("Cancel") } }
         )
