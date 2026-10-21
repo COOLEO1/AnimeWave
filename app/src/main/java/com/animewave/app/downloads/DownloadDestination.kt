@@ -5,7 +5,7 @@ enum class DownloadDestination {
     PUBLIC_DOWNLOADS
 }
 
-/** Metadata model only; downloading is not enabled until an authorized source is configured. */
+/** Metadata for downloads managed through Android DownloadManager from direct, authorized media URLs. */
 data class DownloadRecord(
     val id: String,
     val title: String,
