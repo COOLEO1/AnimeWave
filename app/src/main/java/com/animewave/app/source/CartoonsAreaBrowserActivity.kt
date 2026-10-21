@@ -355,7 +355,8 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                 referer = sourceWebView?.url,
                 cookie = cookie,
                 mimeType = mimeType,
-                fileNameOverride = title
+                fileNameOverride = title,
+                animeFolder = initialQuery.takeIf { it.isNotBlank() }
             )
             val message = if (result.alreadyQueued) {
                 "This URL is already in Downloads."
