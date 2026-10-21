@@ -2,7 +2,7 @@ name: Build AnimeWave Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/downloads-and-ui-hardening]
   workflow_dispatch:
 
 permissions:
