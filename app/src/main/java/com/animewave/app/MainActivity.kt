@@ -2,6 +2,7 @@ package com.animewave.app
 
 import android.app.DownloadManager
 import android.content.Context
+import android.graphics.drawable.ColorDrawable
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -39,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.animewave.app.source.AnimeApi
 import com.animewave.app.downloads.DownloadHelper
 import com.animewave.app.source.AnimeEpisode
@@ -306,17 +308,17 @@ private fun AnimeWaveApp() {
 @Composable
 private fun HeroBanner(item: AnimeItem, onClick: (AnimeItem) -> Unit) {
     Box(
-        Modifier.fillMaxWidth().height(340.dp).clip(RoundedCornerShape(26.dp))
+        Modifier.fillMaxWidth().height(380.dp).clip(RoundedCornerShape(26.dp))
             .background(Brush.linearGradient(listOf(Color(0xFF392452), Color(0xFF151622))))
             .clickable { onClick(item) }
     ) {
-        AsyncImage(model = item.coverUrl ?: item.posterUrl, contentDescription = item.title,
+        AsyncImage(model = posterRequest(item.coverUrl ?: item.posterUrl, LocalContext.current), contentDescription = item.title,
             contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xF0090A12)))))
         Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
             Text("FEATURED SERIES", color = Pink, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text(item.title, fontSize = 27.sp, lineHeight = 31.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(item.title, fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(5.dp))
             Text(listOfNotNull(item.subtype, item.year, item.episodeCount?.let { it.toString() + " episodes" }).joinToString(" • "), color = Color(0xFFE2DDED), fontSize = 11.sp)
             Spacer(Modifier.height(12.dp))
@@ -340,7 +342,7 @@ private fun AnimeRow(animeItems: List<AnimeItem>, onClick: (AnimeItem) -> Unit) 
         items(animeItems, key = { it.id }) { item ->
             Column(Modifier.width(148.dp).clickable { onClick(item) }) {
                 Box(Modifier.fillMaxWidth().height(205.dp).clip(RoundedCornerShape(16.dp)).background(Panel2)) {
-                    AsyncImage(model = item.posterUrl, contentDescription = item.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    AsyncImage(model = posterRequest(item.posterUrl, LocalContext.current), contentDescription = item.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD090A12)))).padding(9.dp)) {
                         Text(item.averageRating?.let { "★ " + it } ?: item.subtype.orEmpty(), fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
                     }
@@ -361,7 +363,7 @@ private fun DetailContent(
     Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
         Text("‹  Back to AnimeWave", color = Violet, modifier = Modifier.clickable(onClick = onBack).padding(vertical = 5.dp))
         Box(Modifier.fillMaxWidth().height(265.dp).clip(RoundedCornerShape(22.dp)).background(Panel2)) {
-            AsyncImage(model = item.coverUrl ?: item.posterUrl, contentDescription = item.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            AsyncImage(model = posterRequest(item.coverUrl ?: item.posterUrl, LocalContext.current), contentDescription = item.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xEE090A12)))))
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -413,10 +415,17 @@ private fun GenreChip(label: String, onClick: () -> Unit) {
 
 @Composable
 private fun LoadingState() {
-    Row(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(color = Violet, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-        Spacer(Modifier.width(12.dp))
-        Text("Loading anime…", color = Muted, fontSize = 12.sp)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Finding your next anime…", color = Muted, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            repeat(3) {
+                Column(Modifier.width(132.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.fillMaxWidth().height(178.dp).clip(RoundedCornerShape(16.dp)).background(Panel2))
+                    Box(Modifier.width(104.dp).height(11.dp).clip(RoundedCornerShape(6.dp)).background(Panel2))
+                    Box(Modifier.width(66.dp).height(9.dp).clip(RoundedCornerShape(6.dp)).background(Panel))
+                }
+            }
+        }
     }
 }
 
@@ -687,3 +696,11 @@ private fun downloadErrorText(reason: Int): String = when (reason) {
     DownloadManager.ERROR_UNKNOWN -> "unknown download error"
     else -> "network or source error"
 }
+
+private fun posterRequest(url: String?, context: Context): ImageRequest =
+    ImageRequest.Builder(context)
+        .data(url)
+        .crossfade(true)
+        .placeholder(ColorDrawable(0xFF202334.toInt()))
+        .error(ColorDrawable(0xFF392452.toInt()))
+        .build()
