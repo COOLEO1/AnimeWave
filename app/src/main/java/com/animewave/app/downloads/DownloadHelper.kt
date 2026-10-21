@@ -23,6 +23,7 @@ object DownloadHelper {
         referer: String? = null,
         cookie: String? = null,
         mimeType: String? = null,
+        fileNameOverride: String? = null,
         bypassDuplicateCheck: Boolean = false
     ): EnqueueResult {
         require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) {
@@ -35,7 +36,12 @@ object DownloadHelper {
         }
 
         val preferences = context.getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
-        val fileName = URLUtil.guessFileName(uri.toString(), null, mimeType)
+        // Prefer the filename supplied by WebView's DownloadListener. It contains the
+        // server's Content-Disposition filename, which is often more accurate than the URL.
+        val fileName = (fileNameOverride?.takeIf { it.isNotBlank() }
+            ?: URLUtil.guessFileName(uri.toString(), null, mimeType))
+            .substringAfterLast('/')
+            .substringAfterLast('\\\\')
             .replace(Regex("[^A-Za-z0-9._ -]"), "_")
             .take(120)
             .ifBlank { safeTitle(title) + ".mp4" }
