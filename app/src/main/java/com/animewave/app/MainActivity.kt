@@ -60,15 +60,22 @@ internal val Pink = Color(0xFFFF6DAE)
 internal val Muted = Color(0xFFAAAFC3)
 
 class MainActivity : ComponentActivity() {
+    private var resumeRefresh: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { AnimeWaveApp() }
+        setContent { AnimeWaveApp { callback -> resumeRefresh = callback } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumeRefresh?.invoke()
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AnimeWaveApp() {
+private fun AnimeWaveApp(registerResumeRefresh: ((() -> Unit) -> Unit)) {
     var tab by rememberSaveable { mutableStateOf("Home") }
     var query by rememberSaveable { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<AnimeItem>>(emptyList()) }
@@ -83,6 +90,15 @@ private fun AnimeWaveApp() {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("animewave_settings", android.content.Context.MODE_PRIVATE) }
+    var continueTitle by remember { mutableStateOf(preferences.getString("last_watched_title", "").orEmpty()) }
+    var continueUrl by remember { mutableStateOf(preferences.getString("last_watched_url", "").orEmpty()) }
+    var continuePosition by remember { mutableLongStateOf(preferences.getLong("last_watched_position", 0L)) }
+    fun refreshContinueWatching() {
+        continueTitle = preferences.getString("last_watched_title", "").orEmpty()
+        continueUrl = preferences.getString("last_watched_url", "").orEmpty()
+        continuePosition = preferences.getLong("last_watched_position", 0L)
+    }
+    SideEffect { registerResumeRefresh { refreshContinueWatching() } }
     var savedIds by remember { mutableStateOf(preferences.getStringSet("saved_anime_ids", emptySet())?.toSet() ?: emptySet()) }
     var tmdbKey by remember { mutableStateOf(preferences.getString("tmdb_api_key", "").orEmpty()) }
     var draftTmdbKey by remember(tmdbKey) { mutableStateOf(tmdbKey) }
@@ -120,6 +136,7 @@ private fun AnimeWaveApp() {
     }
 
     LaunchedEffect(Unit) {
+        refreshContinueWatching()
         catalog = decodeCatalog(preferences.getString("catalog_cache_json", null))
         loadCatalog()
     }
@@ -160,7 +177,7 @@ private fun AnimeWaveApp() {
                     ).forEach { (label, icon, route) ->
                         NavigationBarItem(
                             selected = tab == route,
-                            onClick = { tab = route; closeDetails() },
+                            onClick = { tab = route; closeDetails(); if (route == "Home") refreshContinueWatching() },
                             icon = { Icon(icon, contentDescription = label) },
                             label = { Text(label, fontSize = 10.sp) },
                             colors = NavigationBarItemDefaults.colors(
@@ -307,7 +324,33 @@ private fun AnimeWaveApp() {
                     else -> {
                         if (tab == "Home" && catalog.isNotEmpty()) {
                             HeroBanner(catalog.first(), ::openDetails)
-                            Spacer(Modifier.height(26.dp))
+                            Spacer(Modifier.height(20.dp))
+                        }
+                        if (tab == "Home" && continueTitle.isNotBlank() && continueUrl.isNotBlank()) {
+                            SectionHeading("PICK UP WHERE YOU LEFT OFF", "Continue Watching")
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .background(Panel, RoundedCornerShape(16.dp))
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(continueTitle, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text("Resume from ${continuePosition.coerceAtLeast(0L) / 60000L} min", color = Muted, fontSize = 11.sp)
+                                }
+                                Button(
+                                    onClick = {
+                                        context.startActivity(
+                                            Intent(context, PlayerActivity::class.java)
+                                                .putExtra(PlayerActivity.EXTRA_MEDIA_URL, continueUrl)
+                                                .putExtra(PlayerActivity.EXTRA_TITLE, continueTitle)
+                                        )
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Violet)
+                                ) { Text("Resume") }
+                            }
+                            Spacer(Modifier.height(24.dp))
                         }
                         SectionHeading(
                             if (tab == "Discover") "FIND YOUR NEXT SERIES" else "TRENDING NOW",
