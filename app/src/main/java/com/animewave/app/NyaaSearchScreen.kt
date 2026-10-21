@@ -52,7 +52,7 @@ internal fun NyaaSearchScreen() {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
         Text("NYAA RELEASES", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
         Text("Find releases", fontSize = 25.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Search public index metadata. AnimeWave does not host the indexed files.", color = Muted, fontSize = 12.sp)
+        Text("Smaller releases first · sizes are normalized for readability. Playback depends on the actual files and your player.", color = Muted, fontSize = 12.sp)
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = query,
@@ -72,7 +72,7 @@ internal fun NyaaSearchScreen() {
                 selected = null
                 scope.launch {
                     try {
-                        releases = withContext(Dispatchers.IO) { NyaaRepository().search(term) }
+                        releases = withContext(Dispatchers.IO) { NyaaRepository().search(term) }\n                            .sortedWith(compareBy<NyaaRelease> { it.sizeBytes() ?: Long.MAX_VALUE }.thenByDescending { it.seeders ?: 0 })
                     } catch (e: Exception) {
                         releases = emptyList()
                         error = e.message ?: "Search failed. Check your connection and try again."
@@ -96,7 +96,7 @@ internal fun NyaaSearchScreen() {
                     loading = true
                     error = null
                     scope.launch {
-                        try { releases = withContext(Dispatchers.IO) { NyaaRepository().search(term) } }
+                        try { releases = withContext(Dispatchers.IO) { NyaaRepository().search(term) }\n                            .sortedWith(compareBy<NyaaRelease> { it.sizeBytes() ?: Long.MAX_VALUE }.thenByDescending { it.seeders ?: 0 }) }
                         catch (e: Exception) { error = e.message ?: "Search failed." }
                         finally { loading = false }
                     }
@@ -116,7 +116,7 @@ internal fun NyaaSearchScreen() {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(release.title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Size: ${release.size ?: "—"}", color = Muted, fontSize = 11.sp)
+                        Text("Size: ${release.sizeLabel()}", color = Muted, fontSize = 11.sp)
                         Text("↑ ${release.seeders?.toString() ?: "—"}", color = Color(0xFF79D9A3), fontSize = 11.sp)
                         Text("↓ ${release.leechers?.toString() ?: "—"}", color = Muted, fontSize = 11.sp)
                     }
