@@ -8,14 +8,15 @@ AnimeWave is a native Android anime discovery app built with Kotlin and Jetpack 
 - Poster and cover artwork loaded over HTTPS with Coil
 - Anime synopsis, year, subtype, ratings and known episode counts
 - Episode metadata when Kitsu has a listing
-- Saved titles for the current app session
-- CartoonsArea website button for manual source testing in the browser
+- Saved titles, remembered on the device between launches
+- CartoonsArea in-app browser for the source site
+- Downloads tab with progress, Retry, a Wi-Fi-only switch and a choice of storage location
 - Loading, retry and empty states
 - GitHub Actions debug APK artifact
 
 ## Important source distinction
 
-Kitsu provides catalog metadata and artwork; it does **not** provide playable video streams. The CartoonsArea button opens the website in an external browser. It does not scrape the website, bypass DRM or access controls, extract protected media, or download videos. In-app playback and downloads need a verified, authorized direct media source and its applicable permissions.
+Kitsu provides catalog metadata and artwork; it does **not** provide playable video streams. The CartoonsArea button opens the site in an in-app browser limited to the site's own domains. A page that links straight to a media file can open in the native player, and a file download that the page offers is handed to Android's download manager (it keeps running in the background and is tracked in the Downloads tab). The app does not bypass DRM or access controls, and it does not extract protected streams. Only download media you are authorized to download.
 
 ## Build an APK
 

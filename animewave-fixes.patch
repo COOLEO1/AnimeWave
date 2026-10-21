@@ -1,0 +1,662 @@
+diff --git a/README.md b/README.md
+index 5b7e7b9..2b031ac 100644
+--- a/README.md
++++ b/README.md
+@@ -8,14 +8,15 @@ AnimeWave is a native Android anime discovery app built with Kotlin and Jetpack
+ - Poster and cover artwork loaded over HTTPS with Coil
+ - Anime synopsis, year, subtype, ratings and known episode counts
+ - Episode metadata when Kitsu has a listing
+-- Saved titles for the current app session
+-- CartoonsArea website button for manual source testing in the browser
++- Saved titles, remembered on the device between launches
++- CartoonsArea in-app browser for the source site
++- Downloads tab with progress, Retry, a Wi-Fi-only switch and a choice of storage location
+ - Loading, retry and empty states
+ - GitHub Actions debug APK artifact
+ 
+ ## Important source distinction
+ 
+-Kitsu provides catalog metadata and artwork; it does **not** provide playable video streams. The CartoonsArea button opens the website in an external browser. It does not scrape the website, bypass DRM or access controls, extract protected media, or download videos. In-app playback and downloads need a verified, authorized direct media source and its applicable permissions.
++Kitsu provides catalog metadata and artwork; it does **not** provide playable video streams. The CartoonsArea button opens the site in an in-app browser limited to the site's own domains. A page that links straight to a media file can open in the native player, and a file download that the page offers is handed to Android's download manager (it keeps running in the background and is tracked in the Downloads tab). The app does not bypass DRM or access controls, and it does not extract protected streams. Only download media you are authorized to download.
+ 
+ ## Build an APK
+ 
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 94d910e..d23ea97 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -17,6 +17,7 @@
+             android:exported="false" />
+         <activity
+             android:name=".MainActivity"
++            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+             android:exported="false" />
+         <activity
+             android:name=".SplashActivity"
+diff --git a/app/src/main/java/com/animewave/app/MainActivity.kt b/app/src/main/java/com/animewave/app/MainActivity.kt
+index 3b8c7f1..56e91d1 100644
+--- a/app/src/main/java/com/animewave/app/MainActivity.kt
++++ b/app/src/main/java/com/animewave/app/MainActivity.kt
+@@ -6,7 +6,10 @@ import android.content.Intent
+ import android.net.Uri
+ import android.os.Bundle
+ import androidx.activity.ComponentActivity
++import androidx.activity.compose.BackHandler
+ import androidx.activity.compose.setContent
++import org.json.JSONArray
++import org.json.JSONObject
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.*
+@@ -41,6 +44,7 @@ import coil.compose.AsyncImage
+ import com.animewave.app.source.AnimeApi
+ import com.animewave.app.source.AnimeEpisode
+ import com.animewave.app.source.AnimeItem
++import com.animewave.app.downloads.DownloadHelper
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+@@ -70,10 +74,11 @@ private fun AnimeWaveApp() {
+     var loading by remember { mutableStateOf(true) }
+     var detailLoading by remember { mutableStateOf(false) }
+     var error by remember { mutableStateOf<String?>(null) }
+-    var savedIds by remember { mutableStateOf(setOf<String>()) }
+     val scope = rememberCoroutineScope()
+     val context = LocalContext.current
+     val preferences = remember { context.getSharedPreferences("animewave_settings", android.content.Context.MODE_PRIVATE) }
++    var savedItems by remember { mutableStateOf(loadSavedItems(preferences)) }
++    val savedIds = savedItems.map { it.id }.toSet()
+     var tmdbKey by remember { mutableStateOf(preferences.getString("tmdb_api_key", "").orEmpty()) }
+     var draftTmdbKey by remember(tmdbKey) { mutableStateOf(tmdbKey) }
+     val api = remember(tmdbKey) { AnimeApi(tmdbKey.trim()) }
+@@ -106,6 +111,9 @@ private fun AnimeWaveApp() {
+ 
+     LaunchedEffect(Unit) { loadCatalog() }
+ 
++    // System back from a detail page returns to the list instead of closing the app.
++    BackHandler(enabled = selected != null) { selected = null }
++
+     MaterialTheme(colorScheme = darkColorScheme(
+         background = Night, surface = Panel, surfaceVariant = Panel2,
+         primary = Violet, secondary = Pink, onBackground = Color.White,
+@@ -182,8 +190,10 @@ private fun AnimeWaveApp() {
+                         saved = selected!!.id in savedIds,
+                         onBack = { selected = null },
+                         onSave = {
+-                            savedIds = if (selected!!.id in savedIds) savedIds - selected!!.id
+-                                else savedIds + selected!!.id
++                            val current = selected!!
++                            savedItems = if (current.id in savedIds) savedItems.filter { it.id != current.id }
++                                else savedItems + current
++                            preferences.edit().putString("saved_items", savedItemsToJson(savedItems)).apply()
+                         },
+                         onOpenSource = { sourceQuery ->
+                             context.startActivity(
+@@ -243,7 +253,7 @@ private fun AnimeWaveApp() {
+                     )
+                     "Saved" -> {
+                         SectionHeading("YOUR WATCHLIST", "Saved anime")
+-                        val saved = catalog.filter { it.id in savedIds }
++                        val saved = savedItems
+                         if (saved.isEmpty()) EmptyState("Your list is waiting", "Tap the heart on an anime to save it.")
+                         else AnimeRow(saved, ::openDetails)
+                     }
+@@ -470,6 +480,39 @@ private fun SettingsContent(
+ }
+ 
+ 
++private fun savedItemsToJson(items: List<AnimeItem>): String {
++    val array = JSONArray()
++    items.forEach { a ->
++        array.put(
++            JSONObject()
++                .put("id", a.id).put("title", a.title).put("synopsis", a.synopsis)
++                .put("posterUrl", a.posterUrl ?: "").put("coverUrl", a.coverUrl ?: "")
++                .put("episodeCount", a.episodeCount ?: JSONObject.NULL)
++                .put("year", a.year ?: "").put("subtype", a.subtype ?: "")
++                .put("averageRating", a.averageRating ?: "")
++        )
++    }
++    return array.toString()
++}
++
++private fun loadSavedItems(preferences: android.content.SharedPreferences): List<AnimeItem> = runCatching {
++    val array = JSONArray(preferences.getString("saved_items", "[]"))
++    (0 until array.length()).map { i ->
++        val o = array.getJSONObject(i)
++        AnimeItem(
++            id = o.getString("id"),
++            title = o.getString("title"),
++            synopsis = o.optString("synopsis"),
++            posterUrl = o.optString("posterUrl").ifBlank { null },
++            coverUrl = o.optString("coverUrl").ifBlank { null },
++            episodeCount = if (o.isNull("episodeCount")) null else o.getInt("episodeCount"),
++            year = o.optString("year").ifBlank { null },
++            subtype = o.optString("subtype").ifBlank { null },
++            averageRating = o.optString("averageRating").ifBlank { null }
++        )
++    }
++}.getOrDefault(emptyList())
++
+ private data class AnimeWaveDownload(
+     val id: Long, val title: String, val status: Int,
+     val downloadedBytes: Long, val totalBytes: Long, val reason: Int
+@@ -485,6 +528,9 @@ private fun DownloadsContent(
+     var refreshToken by remember { mutableIntStateOf(0) }
+     var downloads by remember { mutableStateOf<List<AnimeWaveDownload>>(emptyList()) }
+     var loadingDownloads by remember { mutableStateOf(false) }
++    var firstLoad by remember { mutableStateOf(true) }
++    var wifiOnly by remember { mutableStateOf(preferences.getBoolean(DownloadHelper.KEY_WIFI_ONLY, false)) }
++    var message by remember { mutableStateOf<String?>(null) }
+ 
+     LaunchedEffect(downloads) {
+         if (downloads.any {
+@@ -530,6 +576,7 @@ private fun DownloadsContent(
+             }.getOrDefault(emptyList())
+         }
+         loadingDownloads = false
++        firstLoad = false
+     }
+ 
+     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+@@ -555,34 +602,53 @@ private fun DownloadsContent(
+                 }
+             }
+         }
++        Row(
++            Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 8.dp),
++            verticalAlignment = Alignment.CenterVertically
++        ) {
++            Column(Modifier.weight(1f)) {
++                Text("Wi-Fi only", fontWeight = FontWeight.SemiBold)
++                Text("Downloads wait for Wi-Fi. Safer on weak mobile data", color = Muted, fontSize = 11.sp)
++            }
++            Switch(checked = wifiOnly, onCheckedChange = {
++                wifiOnly = it
++                preferences.edit().putBoolean(DownloadHelper.KEY_WIFI_ONLY, it).apply()
++            })
++        }
+         Row(verticalAlignment = Alignment.CenterVertically) {
+             Text("Download activity", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+             TextButton(onClick = { refreshToken++ }) { Text("Refresh") }
+         }
+-        if (loadingDownloads) {
++        message?.let { Text(it, color = Muted, fontSize = 12.sp) }
++        if (firstLoad) {
++            Text("Loading your downloads…", color = Muted, fontSize = 12.sp)
+             LinearProgressIndicator(Modifier.fillMaxWidth(), color = Violet)
+         } else if (downloads.isEmpty()) {
+             EmptyState("Nothing downloaded yet", "Start a supported download from a source page or the player. Your downloads will appear here.")
+         } else {
+             downloads.forEach { item ->
+                 val statusText = when (item.status) {
+-                    DownloadManager.STATUS_PENDING -> "Queued"
++                    DownloadManager.STATUS_PENDING -> "Starting…"
+                     DownloadManager.STATUS_RUNNING -> "Downloading"
+-                    DownloadManager.STATUS_PAUSED -> "Paused"
++                    DownloadManager.STATUS_PAUSED -> DownloadHelper.pausedText(item.reason)
+                     DownloadManager.STATUS_SUCCESSFUL -> "Complete"
+-                    DownloadManager.STATUS_FAILED -> "Failed (code ${item.reason})"
++                    DownloadManager.STATUS_FAILED -> DownloadHelper.failedText(item.reason)
+                     else -> "Checking status"
+                 }
+                 val progress = if (item.totalBytes > 0) (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
+                 Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(15.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                     Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                     Text(
+-                        if (item.totalBytes > 0) "\$statusText • ${(progress * 100).toInt()}% • ${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
++                        if (item.totalBytes > 0) "$statusText • ${(progress * 100).toInt()}% • ${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
+                         else statusText + if (item.downloadedBytes > 0) " • ${formatBytes(item.downloadedBytes)}" else "",
+                         color = Muted, fontSize = 11.sp
+                     )
+                     if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
+-                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Violet)
++                        if (item.status == DownloadManager.STATUS_RUNNING && item.totalBytes > 0) {
++                            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Violet)
++                        } else {
++                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Violet)
++                        }
+                     }
+                     Row(
+                         modifier = Modifier.fillMaxWidth(),
+@@ -606,11 +672,29 @@ private fun DownloadsContent(
+                                 }
+                                 refreshToken++
+                             }) { Text("Remove") }
++                        } else if (item.status == DownloadManager.STATUS_FAILED) {
++                            Button(
++                                onClick = {
++                                    message = when (val result = DownloadHelper.retry(context, item.id)) {
++                                        is DownloadHelper.Result.Started -> "Retrying. It continues in the background."
++                                        is DownloadHelper.Result.Duplicate -> "That episode is already downloading."
++                                        is DownloadHelper.Result.Error -> result.message
++                                    }
++                                    refreshToken++
++                                },
++                                modifier = Modifier.weight(1f),
++                                colors = ButtonDefaults.buttonColors(containerColor = Violet)
++                            ) { Text("Retry") }
++                            OutlinedButton(onClick = {
++                                runCatching {
++                                    (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.id)
++                                }
++                                refreshToken++
++                            }) { Text("Dismiss") }
+                         } else if (
+                             item.status == DownloadManager.STATUS_PENDING ||
+                             item.status == DownloadManager.STATUS_RUNNING ||
+-                            item.status == DownloadManager.STATUS_PAUSED ||
+-                            item.status == DownloadManager.STATUS_FAILED
++                            item.status == DownloadManager.STATUS_PAUSED
+                         ) {
+                             OutlinedButton(
+                                 onClick = {
+@@ -620,7 +704,7 @@ private fun DownloadsContent(
+                                     refreshToken++
+                                 },
+                                 modifier = Modifier.fillMaxWidth()
+-                            ) { Text(if (item.status == DownloadManager.STATUS_FAILED) "Dismiss failed download" else "Cancel download") }
++                            ) { Text("Cancel download") }
+                         }
+                     }
+                 }
+diff --git a/app/src/main/java/com/animewave/app/PlayerActivity.kt b/app/src/main/java/com/animewave/app/PlayerActivity.kt
+index 04234f2..650e81b 100644
+--- a/app/src/main/java/com/animewave/app/PlayerActivity.kt
++++ b/app/src/main/java/com/animewave/app/PlayerActivity.kt
+@@ -50,6 +50,15 @@ class PlayerActivity : ComponentActivity() {
+         pending?.let { enqueueDownloadNow(it.first, it.second) }
+     }
+ 
++    private val storagePermissionLauncher = registerForActivityResult(
++        ActivityResultContracts.RequestPermission()
++    ) { granted ->
++        val pending = pendingDownload
++        pendingDownload = null
++        if (!granted) Toast.makeText(this, "Storage permission denied; saving inside AnimeWave instead.", Toast.LENGTH_LONG).show()
++        pending?.let { enqueueDownloadNow(it.first, it.second) }
++    }
++
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+         val rawUrl = intent.getStringExtra(EXTRA_MEDIA_URL).orEmpty()
+@@ -124,30 +133,25 @@ class PlayerActivity : ComponentActivity() {
+             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+             return
+         }
++        if (com.animewave.app.downloads.DownloadHelper.needsLegacyStoragePermission(this)) {
++            pendingDownload = uri to title
++            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
++            return
++        }
+         enqueueDownloadNow(uri, title)
+     }
+ 
+     private fun enqueueDownloadNow(uri: Uri, title: String) {
+-        runCatching {
+-            require(uri.scheme == "https" || uri.scheme == "http") { "Only direct HTTP(S) media links can be downloaded" }
+-            val fileName = safeFileName(title, uri)
+-            val request = DownloadManager.Request(uri)
+-                .setTitle(title)
+-                .setDescription("AnimeWave episode download")
+-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+-                .setAllowedOverMetered(true)
+-                .setAllowedOverRoaming(false)
+-            val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
+-            if (preferences.getString("download_storage", "phone") == "app") {
+-                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName)
+-            } else {
+-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$fileName")
+-            }
+-            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+-            manager.enqueue(request)
+-            Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
+-        }.onFailure {
+-            Toast.makeText(this, "Could not start download: ${it.message ?: "unsupported source"}", Toast.LENGTH_LONG).show()
++        val fileName = safeFileName(title, uri).replace('_', ' ')
++        when (val result = com.animewave.app.downloads.DownloadHelper.enqueue(
++            this, uri.toString(), null, null, null, null, fileName
++        )) {
++            is com.animewave.app.downloads.DownloadHelper.Result.Started ->
++                Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
++            is com.animewave.app.downloads.DownloadHelper.Result.Duplicate ->
++                Toast.makeText(this, "Already downloading: ${result.name}", Toast.LENGTH_LONG).show()
++            is com.animewave.app.downloads.DownloadHelper.Result.Error ->
++                Toast.makeText(this, "Could not start download: ${result.message}", Toast.LENGTH_LONG).show()
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/animewave/app/downloads/DownloadDestination.kt b/app/src/main/java/com/animewave/app/downloads/DownloadDestination.kt
+index 65062b0..b557c9b 100644
+--- a/app/src/main/java/com/animewave/app/downloads/DownloadDestination.kt
++++ b/app/src/main/java/com/animewave/app/downloads/DownloadDestination.kt
+@@ -5,7 +5,7 @@ enum class DownloadDestination {
+     PUBLIC_DOWNLOADS
+ }
+ 
+-/** Metadata model only; downloading is not enabled until an authorized source is configured. */
++/** Metadata model only. Live downloads are started and tracked through Android's DownloadManager (see DownloadHelper). */
+ data class DownloadRecord(
+     val id: String,
+     val title: String,
+diff --git a/app/src/main/java/com/animewave/app/downloads/DownloadHelper.kt b/app/src/main/java/com/animewave/app/downloads/DownloadHelper.kt
+new file mode 100644
+index 0000000..567286b
+--- /dev/null
++++ b/app/src/main/java/com/animewave/app/downloads/DownloadHelper.kt
+@@ -0,0 +1,191 @@
++package com.animewave.app.downloads
++
++import android.Manifest
++import android.app.DownloadManager
++import android.content.Context
++import android.content.pm.PackageManager
++import android.net.Uri
++import android.os.Build
++import android.os.Environment
++import android.webkit.CookieManager
++import android.webkit.URLUtil
++import org.json.JSONObject
++import java.io.File
++
++/**
++ * Shared download logic: starts downloads through Android's DownloadManager (which keeps running
++ * in the background, with its own notification), avoids duplicates and filename clashes,
++ * supports Wi-Fi-only, and can retry a failed download.
++ */
++object DownloadHelper {
++    private const val PREFS = "animewave_settings"
++    const val KEY_WIFI_ONLY = "download_wifi_only"
++    private const val KEY_META = "download_meta_"
++
++    sealed class Result {
++        data class Started(val id: Long) : Result()
++        data class Duplicate(val name: String) : Result()
++        data class Error(val message: String) : Result()
++    }
++
++    /** True on Android 9 and older when saving to the public Downloads folder and permission isn't granted yet. */
++    fun needsLegacyStoragePermission(context: Context): Boolean {
++        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) return false
++        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++        return prefs.getString("download_storage", "phone") != "app" &&
++            context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
++    }
++
++    fun pausedText(reason: Int): String = when (reason) {
++        DownloadManager.PAUSED_WAITING_TO_RETRY -> "Connection dropped — retrying automatically"
++        DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "Waiting for a network connection"
++        DownloadManager.PAUSED_QUEUED_FOR_WIFI -> "Waiting for Wi-Fi"
++        else -> "Paused"
++    }
++
++    fun failedText(reason: Int): String = when (reason) {
++        DownloadManager.ERROR_HTTP_DATA_ERROR -> "Connection broke mid-download. Try Wi-Fi, then Retry"
++        DownloadManager.ERROR_CANNOT_RESUME -> "Couldn't resume. Retry to start over"
++        DownloadManager.ERROR_INSUFFICIENT_SPACE -> "Not enough storage space"
++        DownloadManager.ERROR_DEVICE_NOT_FOUND -> "Storage isn't available"
++        DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "A file with that name already exists"
++        DownloadManager.ERROR_FILE_ERROR -> "Couldn't write the file"
++        DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "The link kept redirecting"
++        401, 403 -> "The site refused the download. The link may have expired; open the episode again"
++        404 -> "That file is gone (404)"
++        else -> if (reason in 400..599) "Server error (HTTP $reason)" else "Download failed (code $reason)"
++    }
++
++    fun enqueue(
++        context: Context,
++        url: String,
++        userAgent: String?,
++        contentDisposition: String?,
++        mimeType: String?,
++        referer: String?,
++        fileName: String? = null
++    ): Result = try {
++        val uri = Uri.parse(url)
++        require(uri.scheme == "https" || uri.scheme == "http") { "Unsupported download URL" }
++        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
++        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++
++        val baseName = (fileName ?: URLUtil.guessFileName(url, contentDisposition, mimeType))
++            .replace(Regex("[^A-Za-z0-9._ -]"), "_")
++            .take(120)
++            .ifBlank { "anime_download" }
++
++        if (isActive(manager, url)) {
++            Result.Duplicate(baseName)
++        } else {
++            // On Android 9 and older the public Downloads folder needs a runtime permission;
++            // without it, fall back to AnimeWave's own storage instead of failing.
++            val publicStorage = prefs.getString("download_storage", "phone") != "app" &&
++                !needsLegacyStoragePermission(context)
++            val name = uniqueName(baseName, takenTitles(manager), context, publicStorage)
++
++            val request = DownloadManager.Request(uri)
++                .setTitle(name)
++                .setDescription("AnimeWave episode download")
++                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
++                .setAllowedOverMetered(true)
++                .setAllowedOverRoaming(false)
++            if (prefs.getBoolean(KEY_WIFI_ONLY, false)) {
++                request.setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
++            }
++            if (publicStorage) {
++                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$name")
++            } else {
++                request.setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, name)
++            }
++            if (!userAgent.isNullOrBlank()) request.addRequestHeader("User-Agent", userAgent)
++            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let {
++                request.addRequestHeader("Cookie", it)
++            }
++            if (!referer.isNullOrBlank()) request.addRequestHeader("Referer", referer)
++            if (!mimeType.isNullOrBlank()) request.setMimeType(mimeType)
++
++            val id = manager.enqueue(request)
++            // Remember how this download was started so Retry can repeat it.
++            val meta = JSONObject()
++                .put("ua", userAgent.orEmpty())
++                .put("ref", referer.orEmpty())
++                .put("mime", mimeType.orEmpty())
++            prefs.edit().putString(KEY_META + id, meta.toString()).apply()
++            Result.Started(id)
++        }
++    } catch (e: Exception) {
++        Result.Error(e.message ?: "unsupported link")
++    }
++
++    /** Removes the failed entry and starts the same download again. */
++    fun retry(context: Context, failedId: Long): Result {
++        return try {
++            val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
++            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++            var url: String? = null
++            var title: String? = null
++            manager.query(DownloadManager.Query().setFilterById(failedId))?.use { c ->
++                if (c.moveToFirst()) {
++                    val u = c.getColumnIndex(DownloadManager.COLUMN_URI)
++                    val t = c.getColumnIndex(DownloadManager.COLUMN_TITLE)
++                    if (u >= 0) url = c.getString(u)
++                    if (t >= 0) title = c.getString(t)
++                }
++            }
++            val link = url ?: return Result.Error("The original link wasn't saved. Open the episode again.")
++            val meta = prefs.getString(KEY_META + failedId, null)?.let { runCatching { JSONObject(it) }.getOrNull() }
++            manager.remove(failedId)
++            prefs.edit().remove(KEY_META + failedId).apply()
++            enqueue(
++                context, link,
++                userAgent = meta?.optString("ua")?.takeIf { it.isNotBlank() },
++                contentDisposition = null,
++                mimeType = meta?.optString("mime")?.takeIf { it.isNotBlank() },
++                referer = meta?.optString("ref")?.takeIf { it.isNotBlank() },
++                fileName = title
++            )
++        } catch (e: Exception) {
++            Result.Error(e.message ?: "retry failed")
++        }
++    }
++
++    private fun isActive(manager: DownloadManager, url: String): Boolean {
++        val mask = DownloadManager.STATUS_PENDING or DownloadManager.STATUS_RUNNING or DownloadManager.STATUS_PAUSED
++        return runCatching {
++            manager.query(DownloadManager.Query().setFilterByStatus(mask))?.use { c ->
++                val i = c.getColumnIndex(DownloadManager.COLUMN_URI)
++                var found = false
++                while (!found && c.moveToNext()) if (i >= 0 && c.getString(i) == url) found = true
++                found
++            } ?: false
++        }.getOrDefault(false)
++    }
++
++    private fun takenTitles(manager: DownloadManager): Set<String> {
++        val titles = mutableSetOf<String>()
++        runCatching {
++            manager.query(DownloadManager.Query())?.use { c ->
++                val i = c.getColumnIndex(DownloadManager.COLUMN_TITLE)
++                while (c.moveToNext()) if (i >= 0) c.getString(i)?.let { titles += it }
++            }
++        }
++        return titles
++    }
++
++    private fun uniqueName(base: String, taken: Set<String>, context: Context, publicStorage: Boolean): String {
++        val dir = if (publicStorage) {
++            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AnimeWave")
++        } else {
++            context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
++        }
++        fun clash(n: String) = n in taken || (dir != null && File(dir, n).exists())
++        if (!clash(base)) return base
++        val dot = base.lastIndexOf('.')
++        val stem = if (dot > 0) base.substring(0, dot) else base
++        val ext = if (dot > 0) base.substring(dot) else ""
++        var n = 2
++        while (clash("$stem-$n$ext")) n++
++        return "$stem-$n$ext"
++    }
++}
+diff --git a/app/src/main/java/com/animewave/app/source/CartoonsAreaBrowserActivity.kt b/app/src/main/java/com/animewave/app/source/CartoonsAreaBrowserActivity.kt
+index f267ace..908b4df 100644
+--- a/app/src/main/java/com/animewave/app/source/CartoonsAreaBrowserActivity.kt
++++ b/app/src/main/java/com/animewave/app/source/CartoonsAreaBrowserActivity.kt
+@@ -23,6 +23,7 @@ import android.webkit.WebViewClient
+ import android.widget.FrameLayout
+ import android.widget.Toast
+ import androidx.activity.ComponentActivity
++import androidx.activity.OnBackPressedCallback
+ import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.activity.compose.setContent
+ import androidx.compose.foundation.layout.Column
+@@ -68,6 +69,17 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
+         pending?.let { enqueueSourceDownload(it.url, it.userAgent, it.contentDisposition, it.mimeType) }
+     }
+ 
++    private val storagePermissionLauncher = registerForActivityResult(
++        ActivityResultContracts.RequestPermission()
++    ) { granted ->
++        val pending = pendingDownload
++        pendingDownload = null
++        if (!granted) {
++            Toast.makeText(this, "Storage permission denied; saving inside AnimeWave instead.", Toast.LENGTH_LONG).show()
++        }
++        pending?.let { enqueueSourceDownload(it.url, it.userAgent, it.contentDisposition, it.mimeType) }
++    }
++
+     private data class PendingDownload(
+         val url: String,
+         val userAgent: String?,
+@@ -79,6 +91,16 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
+     @SuppressLint("SetJavaScriptEnabled")
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
++        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
++            override fun handleOnBackPressed() {
++                if (customVideoView != null) {
++                    sourceChromeClient?.onHideCustomView()
++                    return
++                }
++                val webView = sourceWebView
++                if (webView?.canGoBack() == true) webView.goBack() else finish()
++            }
++        })
+         val startUrl = intent.getStringExtra(EXTRA_URL)
+             ?.takeIf(::isAllowedSourceUrl)
+             ?: "https://www.cartoonsarea.cc/"
+@@ -289,52 +311,27 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
+             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+             return
+         }
++        if (com.animewave.app.downloads.DownloadHelper.needsLegacyStoragePermission(this)) {
++            pendingDownload = PendingDownload(url, userAgent, contentDisposition, mimeType)
++            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
++            return
++        }
+         enqueueSourceDownload(url, userAgent, contentDisposition, mimeType)
+     }
+ 
+     private fun enqueueSourceDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
+-        runCatching {
+-            val uri = Uri.parse(url)
+-            require(uri.scheme == "https" || uri.scheme == "http") { "Unsupported download URL" }
+-            val guessedName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+-                .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+-                .take(120)
+-                .ifBlank { "anime_download" }
+-            val request = DownloadManager.Request(uri)
+-                .setTitle(guessedName)
+-                .setDescription("AnimeWave episode download")
+-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+-                .setAllowedOverMetered(true)
+-                .setAllowedOverRoaming(false)
+-            val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
+-            if (preferences.getString("download_storage", "phone") == "app") {
+-                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, guessedName)
+-            } else {
+-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$guessedName")
+-            }
+-            if (!userAgent.isNullOrBlank()) request.addRequestHeader("User-Agent", userAgent)
+-            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let {
+-                request.addRequestHeader("Cookie", it)
+-            }
+-            sourceWebView?.url?.let { request.addRequestHeader("Referer", it) }
+-            if (!mimeType.isNullOrBlank()) request.setMimeType(mimeType)
+-            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+-            manager.enqueue(request)
+-            Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
+-        }.onFailure {
+-            Toast.makeText(this, "Download couldn't start: ${it.message ?: "unsupported link"}", Toast.LENGTH_LONG).show()
++        when (val result = com.animewave.app.downloads.DownloadHelper.enqueue(
++            this, url, userAgent, contentDisposition, mimeType, sourceWebView?.url
++        )) {
++            is com.animewave.app.downloads.DownloadHelper.Result.Started ->
++                Toast.makeText(this, "Download started. It keeps going in the background; track it in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
++            is com.animewave.app.downloads.DownloadHelper.Result.Duplicate ->
++                Toast.makeText(this, "Already downloading: ${result.name}", Toast.LENGTH_LONG).show()
++            is com.animewave.app.downloads.DownloadHelper.Result.Error ->
++                Toast.makeText(this, "Download couldn't start: ${result.message}", Toast.LENGTH_LONG).show()
+         }
+     }
+ 
+-    override fun onBackPressed() {
+-        if (customVideoView != null) {
+-            sourceChromeClient?.onHideCustomView()
+-            return
+-        }
+-        val webView = sourceWebView
+-        if (webView?.canGoBack() == true) webView.goBack() else finish()
+-    }
+-
+     override fun onDestroy() {
+         sourceWebView?.apply {
+             stopLoading()
+@@ -355,8 +352,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
+             val host = uri.host?.lowercase() ?: return@runCatching false
+             uri.scheme == "https" &&
+                 (host == "cartoonsarea.cc" || host.endsWith(".cartoonsarea.cc") ||
+-                 host == "cartoonsarea.com" || host.endsWith(".cartoonsarea.com") ||
+-                 host == "eng.cartoonsarea.cc" || host.endsWith(".cartoonsarea.com"))
++                 host == "cartoonsarea.com" || host.endsWith(".cartoonsarea.com"))
+         }.getOrDefault(false)
+ 
+         fun isDirectMediaUrl(value: String): Boolean = runCatching {

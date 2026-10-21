@@ -6,7 +6,10 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import org.json.JSONArray
+import org.json.JSONObject
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -41,6 +44,7 @@ import coil.compose.AsyncImage
 import com.animewave.app.source.AnimeApi
 import com.animewave.app.source.AnimeEpisode
 import com.animewave.app.source.AnimeItem
+import com.animewave.app.downloads.DownloadHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -70,10 +74,11 @@ private fun AnimeWaveApp() {
     var loading by remember { mutableStateOf(true) }
     var detailLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var savedIds by remember { mutableStateOf(setOf<String>()) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("animewave_settings", android.content.Context.MODE_PRIVATE) }
+    var savedItems by remember { mutableStateOf(loadSavedItems(preferences)) }
+    val savedIds = savedItems.map { it.id }.toSet()
     var tmdbKey by remember { mutableStateOf(preferences.getString("tmdb_api_key", "").orEmpty()) }
     var draftTmdbKey by remember(tmdbKey) { mutableStateOf(tmdbKey) }
     val api = remember(tmdbKey) { AnimeApi(tmdbKey.trim()) }
@@ -105,6 +110,9 @@ private fun AnimeWaveApp() {
     }
 
     LaunchedEffect(Unit) { loadCatalog() }
+
+    // System back from a detail page returns to the list instead of closing the app.
+    BackHandler(enabled = selected != null) { selected = null }
 
     MaterialTheme(colorScheme = darkColorScheme(
         background = Night, surface = Panel, surfaceVariant = Panel2,
@@ -182,8 +190,10 @@ private fun AnimeWaveApp() {
                         saved = selected!!.id in savedIds,
                         onBack = { selected = null },
                         onSave = {
-                            savedIds = if (selected!!.id in savedIds) savedIds - selected!!.id
-                                else savedIds + selected!!.id
+                            val current = selected!!
+                            savedItems = if (current.id in savedIds) savedItems.filter { it.id != current.id }
+                                else savedItems + current
+                            preferences.edit().putString("saved_items", savedItemsToJson(savedItems)).apply()
                         },
                         onOpenSource = { sourceQuery ->
                             context.startActivity(
@@ -243,7 +253,7 @@ private fun AnimeWaveApp() {
                     )
                     "Saved" -> {
                         SectionHeading("YOUR WATCHLIST", "Saved anime")
-                        val saved = catalog.filter { it.id in savedIds }
+                        val saved = savedItems
                         if (saved.isEmpty()) EmptyState("Your list is waiting", "Tap the heart on an anime to save it.")
                         else AnimeRow(saved, ::openDetails)
                     }
@@ -470,6 +480,39 @@ private fun SettingsContent(
 }
 
 
+private fun savedItemsToJson(items: List<AnimeItem>): String {
+    val array = JSONArray()
+    items.forEach { a ->
+        array.put(
+            JSONObject()
+                .put("id", a.id).put("title", a.title).put("synopsis", a.synopsis)
+                .put("posterUrl", a.posterUrl ?: "").put("coverUrl", a.coverUrl ?: "")
+                .put("episodeCount", a.episodeCount ?: JSONObject.NULL)
+                .put("year", a.year ?: "").put("subtype", a.subtype ?: "")
+                .put("averageRating", a.averageRating ?: "")
+        )
+    }
+    return array.toString()
+}
+
+private fun loadSavedItems(preferences: android.content.SharedPreferences): List<AnimeItem> = runCatching {
+    val array = JSONArray(preferences.getString("saved_items", "[]"))
+    (0 until array.length()).map { i ->
+        val o = array.getJSONObject(i)
+        AnimeItem(
+            id = o.getString("id"),
+            title = o.getString("title"),
+            synopsis = o.optString("synopsis"),
+            posterUrl = o.optString("posterUrl").ifBlank { null },
+            coverUrl = o.optString("coverUrl").ifBlank { null },
+            episodeCount = if (o.isNull("episodeCount")) null else o.getInt("episodeCount"),
+            year = o.optString("year").ifBlank { null },
+            subtype = o.optString("subtype").ifBlank { null },
+            averageRating = o.optString("averageRating").ifBlank { null }
+        )
+    }
+}.getOrDefault(emptyList())
+
 private data class AnimeWaveDownload(
     val id: Long, val title: String, val status: Int,
     val downloadedBytes: Long, val totalBytes: Long, val reason: Int
@@ -485,6 +528,9 @@ private fun DownloadsContent(
     var refreshToken by remember { mutableIntStateOf(0) }
     var downloads by remember { mutableStateOf<List<AnimeWaveDownload>>(emptyList()) }
     var loadingDownloads by remember { mutableStateOf(false) }
+    var firstLoad by remember { mutableStateOf(true) }
+    var wifiOnly by remember { mutableStateOf(preferences.getBoolean(DownloadHelper.KEY_WIFI_ONLY, false)) }
+    var message by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(downloads) {
         if (downloads.any {
@@ -530,6 +576,7 @@ private fun DownloadsContent(
             }.getOrDefault(emptyList())
         }
         loadingDownloads = false
+        firstLoad = false
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -555,34 +602,53 @@ private fun DownloadsContent(
                 }
             }
         }
+        Row(
+            Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Wi-Fi only", fontWeight = FontWeight.SemiBold)
+                Text("Downloads wait for Wi-Fi. Safer on weak mobile data", color = Muted, fontSize = 11.sp)
+            }
+            Switch(checked = wifiOnly, onCheckedChange = {
+                wifiOnly = it
+                preferences.edit().putBoolean(DownloadHelper.KEY_WIFI_ONLY, it).apply()
+            })
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Download activity", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
             TextButton(onClick = { refreshToken++ }) { Text("Refresh") }
         }
-        if (loadingDownloads) {
+        message?.let { Text(it, color = Muted, fontSize = 12.sp) }
+        if (firstLoad) {
+            Text("Loading your downloads…", color = Muted, fontSize = 12.sp)
             LinearProgressIndicator(Modifier.fillMaxWidth(), color = Violet)
         } else if (downloads.isEmpty()) {
             EmptyState("Nothing downloaded yet", "Start a supported download from a source page or the player. Your downloads will appear here.")
         } else {
             downloads.forEach { item ->
                 val statusText = when (item.status) {
-                    DownloadManager.STATUS_PENDING -> "Queued"
+                    DownloadManager.STATUS_PENDING -> "Starting…"
                     DownloadManager.STATUS_RUNNING -> "Downloading"
-                    DownloadManager.STATUS_PAUSED -> "Paused"
+                    DownloadManager.STATUS_PAUSED -> DownloadHelper.pausedText(item.reason)
                     DownloadManager.STATUS_SUCCESSFUL -> "Complete"
-                    DownloadManager.STATUS_FAILED -> "Failed (code ${item.reason})"
+                    DownloadManager.STATUS_FAILED -> DownloadHelper.failedText(item.reason)
                     else -> "Checking status"
                 }
                 val progress = if (item.totalBytes > 0) (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
                 Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(15.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
-                        if (item.totalBytes > 0) "\$statusText • ${(progress * 100).toInt()}% • ${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
+                        if (item.totalBytes > 0) "$statusText • ${(progress * 100).toInt()}% • ${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
                         else statusText + if (item.downloadedBytes > 0) " • ${formatBytes(item.downloadedBytes)}" else "",
                         color = Muted, fontSize = 11.sp
                     )
                     if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
-                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Violet)
+                        if (item.status == DownloadManager.STATUS_RUNNING && item.totalBytes > 0) {
+                            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Violet)
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Violet)
+                        }
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -606,11 +672,29 @@ private fun DownloadsContent(
                                 }
                                 refreshToken++
                             }) { Text("Remove") }
+                        } else if (item.status == DownloadManager.STATUS_FAILED) {
+                            Button(
+                                onClick = {
+                                    message = when (val result = DownloadHelper.retry(context, item.id)) {
+                                        is DownloadHelper.Result.Started -> "Retrying. It continues in the background."
+                                        is DownloadHelper.Result.Duplicate -> "That episode is already downloading."
+                                        is DownloadHelper.Result.Error -> result.message
+                                    }
+                                    refreshToken++
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Violet)
+                            ) { Text("Retry") }
+                            OutlinedButton(onClick = {
+                                runCatching {
+                                    (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.id)
+                                }
+                                refreshToken++
+                            }) { Text("Dismiss") }
                         } else if (
                             item.status == DownloadManager.STATUS_PENDING ||
                             item.status == DownloadManager.STATUS_RUNNING ||
-                            item.status == DownloadManager.STATUS_PAUSED ||
-                            item.status == DownloadManager.STATUS_FAILED
+                            item.status == DownloadManager.STATUS_PAUSED
                         ) {
                             OutlinedButton(
                                 onClick = {
@@ -620,7 +704,7 @@ private fun DownloadsContent(
                                     refreshToken++
                                 },
                                 modifier = Modifier.fillMaxWidth()
-                            ) { Text(if (item.status == DownloadManager.STATUS_FAILED) "Dismiss failed download" else "Cancel download") }
+                            ) { Text("Cancel download") }
                         }
                     }
                 }

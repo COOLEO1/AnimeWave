@@ -23,6 +23,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
@@ -68,6 +69,17 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
         pending?.let { enqueueSourceDownload(it.url, it.userAgent, it.contentDisposition, it.mimeType) }
     }
 
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val pending = pendingDownload
+        pendingDownload = null
+        if (!granted) {
+            Toast.makeText(this, "Storage permission denied; saving inside AnimeWave instead.", Toast.LENGTH_LONG).show()
+        }
+        pending?.let { enqueueSourceDownload(it.url, it.userAgent, it.contentDisposition, it.mimeType) }
+    }
+
     private data class PendingDownload(
         val url: String,
         val userAgent: String?,
@@ -79,6 +91,16 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (customVideoView != null) {
+                    sourceChromeClient?.onHideCustomView()
+                    return
+                }
+                val webView = sourceWebView
+                if (webView?.canGoBack() == true) webView.goBack() else finish()
+            }
+        })
         val startUrl = intent.getStringExtra(EXTRA_URL)
             ?.takeIf(::isAllowedSourceUrl)
             ?: "https://www.cartoonsarea.cc/"
@@ -289,50 +311,25 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
+        if (com.animewave.app.downloads.DownloadHelper.needsLegacyStoragePermission(this)) {
+            pendingDownload = PendingDownload(url, userAgent, contentDisposition, mimeType)
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
         enqueueSourceDownload(url, userAgent, contentDisposition, mimeType)
     }
 
     private fun enqueueSourceDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
-        runCatching {
-            val uri = Uri.parse(url)
-            require(uri.scheme == "https" || uri.scheme == "http") { "Unsupported download URL" }
-            val guessedName = URLUtil.guessFileName(url, contentDisposition, mimeType)
-                .replace(Regex("[^A-Za-z0-9._ -]"), "_")
-                .take(120)
-                .ifBlank { "anime_download" }
-            val request = DownloadManager.Request(uri)
-                .setTitle(guessedName)
-                .setDescription("AnimeWave episode download")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(false)
-            val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
-            if (preferences.getString("download_storage", "phone") == "app") {
-                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, guessedName)
-            } else {
-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$guessedName")
-            }
-            if (!userAgent.isNullOrBlank()) request.addRequestHeader("User-Agent", userAgent)
-            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let {
-                request.addRequestHeader("Cookie", it)
-            }
-            sourceWebView?.url?.let { request.addRequestHeader("Referer", it) }
-            if (!mimeType.isNullOrBlank()) request.setMimeType(mimeType)
-            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            manager.enqueue(request)
-            Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
-        }.onFailure {
-            Toast.makeText(this, "Download couldn't start: ${it.message ?: "unsupported link"}", Toast.LENGTH_LONG).show()
+        when (val result = com.animewave.app.downloads.DownloadHelper.enqueue(
+            this, url, userAgent, contentDisposition, mimeType, sourceWebView?.url
+        )) {
+            is com.animewave.app.downloads.DownloadHelper.Result.Started ->
+                Toast.makeText(this, "Download started. It keeps going in the background; track it in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
+            is com.animewave.app.downloads.DownloadHelper.Result.Duplicate ->
+                Toast.makeText(this, "Already downloading: ${result.name}", Toast.LENGTH_LONG).show()
+            is com.animewave.app.downloads.DownloadHelper.Result.Error ->
+                Toast.makeText(this, "Download couldn't start: ${result.message}", Toast.LENGTH_LONG).show()
         }
-    }
-
-    override fun onBackPressed() {
-        if (customVideoView != null) {
-            sourceChromeClient?.onHideCustomView()
-            return
-        }
-        val webView = sourceWebView
-        if (webView?.canGoBack() == true) webView.goBack() else finish()
     }
 
     override fun onDestroy() {
@@ -355,8 +352,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
             val host = uri.host?.lowercase() ?: return@runCatching false
             uri.scheme == "https" &&
                 (host == "cartoonsarea.cc" || host.endsWith(".cartoonsarea.cc") ||
-                 host == "cartoonsarea.com" || host.endsWith(".cartoonsarea.com") ||
-                 host == "eng.cartoonsarea.cc" || host.endsWith(".cartoonsarea.com"))
+                 host == "cartoonsarea.com" || host.endsWith(".cartoonsarea.com"))
         }.getOrDefault(false)
 
         fun isDirectMediaUrl(value: String): Boolean = runCatching {
