@@ -2,11 +2,13 @@ package com.animewave.app
 
 import android.app.DownloadManager
 import android.content.Context
+import android.graphics.drawable.ColorDrawable
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,7 +25,9 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,7 +42,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.animewave.app.source.AnimeApi
+import com.animewave.app.downloads.DownloadHelper
 import com.animewave.app.source.AnimeEpisode
 import com.animewave.app.source.AnimeItem
 import kotlinx.coroutines.Dispatchers
@@ -47,45 +53,71 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val Night = Color(0xFF090A12)
-private val Panel = Color(0xFF171925)
-private val Panel2 = Color(0xFF202334)
-private val Violet = Color(0xFF9B72FF)
-private val Pink = Color(0xFFFF6DAE)
-private val Muted = Color(0xFFAAAFC3)
+internal val Panel = Color(0xFF171925)
+internal val Panel2 = Color(0xFF202334)
+internal val Violet = Color(0xFF9B72FF)
+internal val Pink = Color(0xFFFF6DAE)
+internal val Muted = Color(0xFFAAAFC3)
 
 class MainActivity : ComponentActivity() {
+    private var resumeRefresh: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { AnimeWaveApp() }
+        setContent { AnimeWaveApp { callback -> resumeRefresh = callback } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumeRefresh?.invoke()
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AnimeWaveApp() {
-    var tab by remember { mutableStateOf("Home") }
-    var query by remember { mutableStateOf("") }
+private fun AnimeWaveApp(registerResumeRefresh: ((() -> Unit) -> Unit)) {
+    var tab by rememberSaveable { mutableStateOf("Home") }
+    var query by rememberSaveable { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<AnimeItem>>(emptyList()) }
+    var catalogPage by remember { mutableIntStateOf(1) }
+    var hasMoreCatalog by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<AnimeItem?>(null) }
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var episodes by remember { mutableStateOf<List<AnimeEpisode>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var detailLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var savedIds by remember { mutableStateOf(setOf<String>()) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("animewave_settings", android.content.Context.MODE_PRIVATE) }
+    var continueTitle by remember { mutableStateOf(preferences.getString("last_watched_title", "").orEmpty()) }
+    var continueUrl by remember { mutableStateOf(preferences.getString("last_watched_url", "").orEmpty()) }
+    var continuePosition by remember { mutableLongStateOf(preferences.getLong("last_watched_position", 0L)) }
+    fun refreshContinueWatching() {
+        continueTitle = preferences.getString("last_watched_title", "").orEmpty()
+        continueUrl = preferences.getString("last_watched_url", "").orEmpty()
+        continuePosition = preferences.getLong("last_watched_position", 0L)
+    }
+    SideEffect { registerResumeRefresh { refreshContinueWatching() } }
+    var savedIds by remember { mutableStateOf(preferences.getStringSet("saved_anime_ids", emptySet())?.toSet() ?: emptySet()) }
     var tmdbKey by remember { mutableStateOf(preferences.getString("tmdb_api_key", "").orEmpty()) }
     var draftTmdbKey by remember(tmdbKey) { mutableStateOf(tmdbKey) }
     val api = remember(tmdbKey) { AnimeApi(tmdbKey.trim()) }
 
-    fun loadCatalog(search: String = "") {
+    fun loadCatalog(search: String = "", page: Int = 1, append: Boolean = false) {
         scope.launch {
             loading = true
             error = null
             try {
-                catalog = withContext(Dispatchers.IO) {
-                    if (search.isBlank()) api.trending() else api.search(search)
+                val fetched = withContext(Dispatchers.IO) {
+                    if (search.isBlank()) api.trending(page) else api.search(search, page)
                 }
+                catalog = if (append) {
+                    (catalog + fetched).distinctBy { it.id }
+                } else fetched
+                catalogPage = page
+                hasMoreCatalog = fetched.size >= if (tmdbKey.isBlank()) 24 else 20
+                preferences.edit().putString("catalog_cache_json", encodeCatalog(catalog)).apply()
             } catch (e: Exception) {
                 error = e.message ?: "Could not load the anime catalog."
             } finally {
@@ -95,16 +127,37 @@ private fun AnimeWaveApp() {
     }
     fun openDetails(item: AnimeItem) {
         selected = item
-        detailLoading = true
-        scope.launch {
-            episodes = withContext(Dispatchers.IO) {
-                runCatching { api.episodes(item.id) }.getOrDefault(emptyList())
-            }
-            detailLoading = false
+        selectedId = item.id
+    }
+    fun closeDetails() {
+        selected = null
+        selectedId = null
+        episodes = emptyList()
+    }
+
+    LaunchedEffect(Unit) {
+        refreshContinueWatching()
+        catalog = decodeCatalog(preferences.getString("catalog_cache_json", null))
+        loadCatalog()
+    }
+
+    LaunchedEffect(selectedId, catalog) {
+        val id = selectedId
+        if (id != null && selected?.id != id) {
+            selected = catalog.firstOrNull { it.id == id }
         }
     }
 
-    LaunchedEffect(Unit) { loadCatalog() }
+    LaunchedEffect(selected?.id, api) {
+        val item = selected ?: return@LaunchedEffect
+        detailLoading = true
+        episodes = withContext(Dispatchers.IO) {
+            runCatching { api.episodes(item.id) }.getOrDefault(emptyList())
+        }
+        detailLoading = false
+    }
+
+    BackHandler(enabled = selected != null || selectedId != null) { closeDetails() }
 
     MaterialTheme(colorScheme = darkColorScheme(
         background = Night, surface = Panel, surfaceVariant = Panel2,
@@ -124,7 +177,7 @@ private fun AnimeWaveApp() {
                     ).forEach { (label, icon, route) ->
                         NavigationBarItem(
                             selected = tab == route,
-                            onClick = { tab = route; selected = null },
+                            onClick = { tab = route; closeDetails(); if (route == "Home") refreshContinueWatching() },
                             icon = { Icon(icon, contentDescription = label) },
                             label = { Text(label, fontSize = 10.sp) },
                             colors = NavigationBarItemDefaults.colors(
@@ -137,8 +190,15 @@ private fun AnimeWaveApp() {
                 }
             }
         ) { padding ->
+            PullToRefreshBox(
+                isRefreshing = loading && catalog.isNotEmpty(),
+                onRefresh = {
+                    if (tab == "Home" || tab == "Discover") loadCatalog(query.trim())
+                },
+                modifier = Modifier.fillMaxSize().padding(padding)
+            ) {
             Column(
-                Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                     .padding(horizontal = 18.dp)
             ) {
                 Spacer(Modifier.height(18.dp))
@@ -180,10 +240,12 @@ private fun AnimeWaveApp() {
                     DetailContent(
                         item = selected!!, episodes = episodes, loading = detailLoading,
                         saved = selected!!.id in savedIds,
-                        onBack = { selected = null },
+                        onBack = { closeDetails() },
                         onSave = {
-                            savedIds = if (selected!!.id in savedIds) savedIds - selected!!.id
-                                else savedIds + selected!!.id
+                            val id = selected!!.id
+                            val updated = if (id in savedIds) savedIds - id else savedIds + id
+                            savedIds = updated
+                            preferences.edit().putStringSet("saved_anime_ids", updated).apply()
                         },
                         onOpenSource = { sourceQuery ->
                             context.startActivity(
@@ -208,7 +270,7 @@ private fun AnimeWaveApp() {
                             preferences.edit().putString("tmdb_api_key", cleaned).apply()
                             tmdbKey = cleaned
                             tab = "Home"
-                            selected = null
+                            closeDetails()
                             scope.launch {
                                 loading = true
                                 error = null
@@ -262,7 +324,33 @@ private fun AnimeWaveApp() {
                     else -> {
                         if (tab == "Home" && catalog.isNotEmpty()) {
                             HeroBanner(catalog.first(), ::openDetails)
-                            Spacer(Modifier.height(26.dp))
+                            Spacer(Modifier.height(20.dp))
+                        }
+                        if (tab == "Home" && continueTitle.isNotBlank() && continueUrl.isNotBlank()) {
+                            SectionHeading("PICK UP WHERE YOU LEFT OFF", "Continue Watching")
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .background(Panel, RoundedCornerShape(16.dp))
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(continueTitle, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text("Resume from ${continuePosition.coerceAtLeast(0L) / 60000L} min", color = Muted, fontSize = 11.sp)
+                                }
+                                Button(
+                                    onClick = {
+                                        context.startActivity(
+                                            Intent(context, PlayerActivity::class.java)
+                                                .putExtra(PlayerActivity.EXTRA_MEDIA_URL, continueUrl)
+                                                .putExtra(PlayerActivity.EXTRA_TITLE, continueTitle)
+                                        )
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Violet)
+                                ) { Text("Resume") }
+                            }
+                            Spacer(Modifier.height(24.dp))
                         }
                         SectionHeading(
                             if (tab == "Discover") "FIND YOUR NEXT SERIES" else "TRENDING NOW",
@@ -276,7 +364,16 @@ private fun AnimeWaveApp() {
                                 Button(onClick = { loadCatalog(query.trim()) }) { Text("Try again") }
                             }
                             catalog.isEmpty() -> EmptyState("No anime found", "Try another title or spelling.")
-                            else -> AnimeRow(catalog, ::openDetails)
+                            else -> {
+                                AnimeRow(catalog, ::openDetails)
+                                if (hasMoreCatalog) {
+                                    TextButton(
+                                        onClick = { loadCatalog(query.trim(), catalogPage + 1, append = true) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !loading
+                                    ) { Text(if (loading) "Loading more…" else "Load more anime") }
+                                }
+                            }
                         }
                         Spacer(Modifier.height(24.dp))
                         if (tab == "Home") {
@@ -293,347 +390,46 @@ private fun AnimeWaveApp() {
                 }
                 Spacer(Modifier.height(26.dp))
             }
-        }
-    }
-}
-
-@Composable
-private fun HeroBanner(item: AnimeItem, onClick: (AnimeItem) -> Unit) {
-    Box(
-        Modifier.fillMaxWidth().height(340.dp).clip(RoundedCornerShape(26.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF392452), Color(0xFF151622))))
-            .clickable { onClick(item) }
-    ) {
-        AsyncImage(model = item.coverUrl ?: item.posterUrl, contentDescription = item.title,
-            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xF0090A12)))))
-        Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-            Text("FEATURED SERIES", color = Pink, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text(item.title, fontSize = 27.sp, lineHeight = 31.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(5.dp))
-            Text(listOfNotNull(item.subtype, item.year, item.episodeCount?.let { it.toString() + " episodes" }).joinToString(" • "), color = Color(0xFFE2DDED), fontSize = 11.sp)
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = { onClick(item) }, colors = ButtonDefaults.buttonColors(containerColor = Violet)) { Text("Explore series") }
-        }
-    }
-}
-
-@Composable
-private fun SectionHeading(eyebrow: String, title: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(eyebrow, color = Violet, fontSize = 9.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-        Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-    }
-    Spacer(Modifier.height(14.dp))
-}
-
-@Composable
-private fun AnimeRow(animeItems: List<AnimeItem>, onClick: (AnimeItem) -> Unit) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(13.dp), contentPadding = PaddingValues(end = 4.dp)) {
-        items(animeItems, key = { it.id }) { item ->
-            Column(Modifier.width(148.dp).clickable { onClick(item) }) {
-                Box(Modifier.fillMaxWidth().height(205.dp).clip(RoundedCornerShape(16.dp)).background(Panel2)) {
-                    AsyncImage(model = item.posterUrl, contentDescription = item.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD090A12)))).padding(9.dp)) {
-                        Text(item.averageRating?.let { "★ " + it } ?: item.subtype.orEmpty(), fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(item.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(item.year ?: "Anime series", color = Muted, fontSize = 10.sp)
             }
         }
     }
 }
 
-@Composable
-private fun DetailContent(
-    item: AnimeItem, episodes: List<AnimeEpisode>, loading: Boolean, saved: Boolean,
-    onBack: () -> Unit, onSave: () -> Unit, onOpenSource: (String) -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        Text("‹  Back to AnimeWave", color = Violet, modifier = Modifier.clickable(onClick = onBack).padding(vertical = 5.dp))
-        Box(Modifier.fillMaxWidth().height(265.dp).clip(RoundedCornerShape(22.dp)).background(Panel2)) {
-            AsyncImage(model = item.coverUrl ?: item.posterUrl, contentDescription = item.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xEE090A12)))))
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(item.title, fontSize = 27.sp, lineHeight = 31.sp, fontWeight = FontWeight.ExtraBold)
-                Text(listOfNotNull(item.year, item.subtype, item.episodeCount?.let { it.toString() + " episodes" }).joinToString(" • "), color = Muted, fontSize = 11.sp)
-            }
-            IconButton(onClick = onSave) {
-                Icon(Icons.Default.Favorite, contentDescription = "Save anime", tint = if (saved) Pink else Muted)
-            }
-        }
-        if (item.synopsis.isNotBlank()) Text(item.synopsis, color = Color(0xFFD3D5E1), fontSize = 13.sp, lineHeight = 20.sp)
-        Button(onClick = { onOpenSource(item.title) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Violet)) {
-            Text("Find on CartoonsArea")
-        }
-        Text("Episodes", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        when {
-            loading -> LoadingState()
-            episodes.isEmpty() -> Text("Episode listing isn't available for this title yet.", color = Muted, fontSize = 12.sp)
-            else -> episodes.forEach { ep ->
-                Row(
-                    Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp))
-                        .clickable { onOpenSource(item.title + " episode " + (ep.number?.toString() ?: ep.title)) }
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(Modifier.size(42.dp).background(Panel2, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                        Text(ep.number?.toString() ?: "•", color = Violet, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.width(11.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(ep.title.ifBlank { "Episode " + (ep.number?.toString() ?: "") }, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        ep.airdate?.let { Text(it, color = Muted, fontSize = 10.sp) }
-                    }
-                    Text("EP", color = Muted, fontSize = 10.sp)
-                }
-            }
-        }
-        Text("Tap an episode to search CartoonsArea inside AnimeWave. Playback and downloads depend on the source offering media you are authorized to access.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
-    }
-}
-
-@Composable
-private fun GenreChip(label: String, onClick: () -> Unit) {
-    Surface(shape = RoundedCornerShape(50), color = Panel2, modifier = Modifier.clickable(onClick = onClick)) {
-        Text(label, color = Color.White, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
-    }
-}
-
-@Composable
-private fun LoadingState() {
-    Row(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(color = Violet, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-        Spacer(Modifier.width(12.dp))
-        Text("Loading anime…", color = Muted, fontSize = 12.sp)
-    }
-}
-
-@Composable
-private fun EmptyState(title: String, subtitle: String) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(6.dp))
-        Text(subtitle, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
-    }
-}
-
-
-@Composable
-private fun SettingsContent(
-    tmdbKey: String,
-    onKeyChange: (String) -> Unit,
-    onSave: () -> Unit,
-    onGetKey: () -> Unit,
-    onClearKey: () -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("Settings", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-        Text("CATALOG PROVIDERS", color = Violet, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-        Text("AnimeWave works without an API key using Kitsu. Add your free TMDB API key or read access token to switch to TMDB anime-series metadata and artwork.", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
-        OutlinedTextField(
-            value = tmdbKey,
-            onValueChange = onKeyChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("TMDB API key or read token") },
-            placeholder = { Text("Paste your free TMDB credential") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            shape = RoundedCornerShape(16.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                unfocusedBorderColor = Color(0xFF303246),
-                focusedBorderColor = Violet,
-                unfocusedContainerColor = Panel,
-                focusedContainerColor = Panel
-            )
+private fun encodeCatalog(items: List<AnimeItem>): String {
+    val array = org.json.JSONArray()
+    items.forEach { item ->
+        array.put(org.json.JSONObject()
+            .put("id", item.id)
+            .put("title", item.title)
+            .put("synopsis", item.synopsis)
+            .put("posterUrl", item.posterUrl ?: "")
+            .put("coverUrl", item.coverUrl ?: "")
+            .put("episodeCount", item.episodeCount ?: -1)
+            .put("year", item.year ?: "")
+            .put("subtype", item.subtype ?: "")
+            .put("averageRating", item.averageRating ?: "")
         )
-        Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Violet)) {
-            Text("Save key and refresh catalog")
-        }
-        OutlinedButton(onClick = onGetKey, modifier = Modifier.fillMaxWidth()) {
-            Text("Get a free TMDB API key")
-        }
-        TextButton(onClick = onClearKey, modifier = Modifier.fillMaxWidth()) {
-            Text("Clear key and use Kitsu instead", color = Pink)
-        }
-        Divider(color = Color(0xFF303246))
-        Text("YOUR PRIVACY", fontSize = 10.sp, letterSpacing = 2.sp, color = Violet, fontWeight = FontWeight.Bold)
-        Text("Your API key is saved in this app's local preferences on this device. Catalog searches are sent to the provider you choose. Never paste a private or paid account password here.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-        Text("TMDB provides catalog metadata and artwork, not video streams. Kitsu is the automatic no-key option. Neither provider grants AnimeWave access to CartoonsArea's protected media.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-        Text("AnimeWave • built for anime discovery", color = Muted, fontSize = 10.sp)
     }
+    return array.toString()
 }
 
-
-private data class AnimeWaveDownload(
-    val id: Long, val title: String, val status: Int,
-    val downloadedBytes: Long, val totalBytes: Long, val reason: Int
-)
-
-@Composable
-private fun DownloadsContent(
-    preferences: android.content.SharedPreferences,
-    onPlay: (Uri, String) -> Unit
-) {
-    val context = LocalContext.current
-    var storageChoice by remember { mutableStateOf(preferences.getString("download_storage", "phone") ?: "phone") }
-    var refreshToken by remember { mutableIntStateOf(0) }
-    var downloads by remember { mutableStateOf<List<AnimeWaveDownload>>(emptyList()) }
-    var loadingDownloads by remember { mutableStateOf(false) }
-
-    LaunchedEffect(downloads) {
-        if (downloads.any {
-                it.status == DownloadManager.STATUS_PENDING ||
-                it.status == DownloadManager.STATUS_RUNNING ||
-                it.status == DownloadManager.STATUS_PAUSED
-            }) {
-            delay(1000)
-            refreshToken++
-        }
+private fun decodeCatalog(json: String?): List<AnimeItem> = runCatching {
+    val array = org.json.JSONArray(json.orEmpty())
+    (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id")
+        val title = item.optString("title")
+        if (id.isBlank() || title.isBlank()) return@mapNotNull null
+        AnimeItem(
+            id = id,
+            title = title,
+            synopsis = item.optString("synopsis"),
+            posterUrl = item.optString("posterUrl").takeIf { it.startsWith("https://") },
+            coverUrl = item.optString("coverUrl").takeIf { it.startsWith("https://") },
+            episodeCount = item.optInt("episodeCount", -1).takeIf { it > 0 },
+            year = item.optString("year").takeIf { it.isNotBlank() },
+            subtype = item.optString("subtype").takeIf { it.isNotBlank() },
+            averageRating = item.optString("averageRating").takeIf { it.isNotBlank() }
+        )
     }
-
-    LaunchedEffect(refreshToken) {
-        loadingDownloads = true
-        downloads = withContext(Dispatchers.IO) {
-            runCatching {
-                val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                val mask = DownloadManager.STATUS_PENDING or DownloadManager.STATUS_RUNNING or
-                    DownloadManager.STATUS_PAUSED or DownloadManager.STATUS_SUCCESSFUL or DownloadManager.STATUS_FAILED
-                val found = mutableListOf<AnimeWaveDownload>()
-                manager.query(DownloadManager.Query().setFilterByStatus(mask))?.use { cursor ->
-                    while (cursor.moveToNext()) {
-                        fun longColumn(name: String): Long {
-                            val index = cursor.getColumnIndex(name)
-                            return if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else -1L
-                        }
-                        fun intColumn(name: String): Int {
-                            val index = cursor.getColumnIndex(name)
-                            return if (index >= 0 && !cursor.isNull(index)) cursor.getInt(index) else 0
-                        }
-                        val titleIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TITLE)
-                        val title = if (titleIndex >= 0) cursor.getString(titleIndex) ?: "Anime download" else "Anime download"
-                        found += AnimeWaveDownload(
-                            longColumn(DownloadManager.COLUMN_ID), title,
-                            intColumn(DownloadManager.COLUMN_STATUS),
-                            longColumn(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
-                            longColumn(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
-                            intColumn(DownloadManager.COLUMN_REASON)
-                        )
-                    }
-                }
-                found.sortedByDescending { it.id }
-            }.getOrDefault(emptyList())
-        }
-        loadingDownloads = false
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionHeading("OFFLINE LIBRARY", "Downloads")
-        Text("Choose where new episodes are saved.", color = Muted, fontSize = 12.sp)
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(storageChoice == "phone", onClick = {
-                    storageChoice = "phone"; preferences.edit().putString("download_storage", "phone").apply()
-                })
-                Column(Modifier.weight(1f)) {
-                    Text("Phone Downloads folder", fontWeight = FontWeight.SemiBold)
-                    Text("Visible in your phone's Files app", color = Muted, fontSize = 11.sp)
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(storageChoice == "app", onClick = {
-                    storageChoice = "app"; preferences.edit().putString("download_storage", "app").apply()
-                })
-                Column(Modifier.weight(1f)) {
-                    Text("Inside AnimeWave", fontWeight = FontWeight.SemiBold)
-                    Text("App-specific storage; removed if you uninstall the app", color = Muted, fontSize = 11.sp)
-                }
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Download activity", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-            TextButton(onClick = { refreshToken++ }) { Text("Refresh") }
-        }
-        if (loadingDownloads) {
-            LinearProgressIndicator(Modifier.fillMaxWidth(), color = Violet)
-        } else if (downloads.isEmpty()) {
-            EmptyState("Nothing downloaded yet", "Start a supported download from a source page or the player. Your downloads will appear here.")
-        } else {
-            downloads.forEach { item ->
-                val statusText = when (item.status) {
-                    DownloadManager.STATUS_PENDING -> "Queued"
-                    DownloadManager.STATUS_RUNNING -> "Downloading"
-                    DownloadManager.STATUS_PAUSED -> "Paused"
-                    DownloadManager.STATUS_SUCCESSFUL -> "Complete"
-                    DownloadManager.STATUS_FAILED -> "Failed (code ${item.reason})"
-                    else -> "Checking status"
-                }
-                val progress = if (item.totalBytes > 0) (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
-                Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(15.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        if (item.totalBytes > 0) "\$statusText • ${(progress * 100).toInt()}% • ${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
-                        else statusText + if (item.downloadedBytes > 0) " • ${formatBytes(item.downloadedBytes)}" else "",
-                        color = Muted, fontSize = 11.sp
-                    )
-                    if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
-                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Violet)
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (item.status == DownloadManager.STATUS_SUCCESSFUL) {
-                            Button(
-                                onClick = {
-                                    runCatching {
-                                        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                                        manager.getUriForDownloadedFile(item.id)?.let { onPlay(it, item.title) }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(containerColor = Violet)
-                            ) { Text("Watch offline") }
-                            OutlinedButton(onClick = {
-                                runCatching {
-                                    (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.id)
-                                }
-                                refreshToken++
-                            }) { Text("Remove") }
-                        } else if (
-                            item.status == DownloadManager.STATUS_PENDING ||
-                            item.status == DownloadManager.STATUS_RUNNING ||
-                            item.status == DownloadManager.STATUS_PAUSED ||
-                            item.status == DownloadManager.STATUS_FAILED
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    runCatching {
-                                        (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.id)
-                                    }
-                                    refreshToken++
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text(if (item.status == DownloadManager.STATUS_FAILED) "Dismiss failed download" else "Cancel download") }
-                        }
-                    }
-                }
-            }
-        }
-        Text("Notifications depend on Android notification settings. Only direct, accessible media files can be downloaded and played here.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
-    }
-}
-
-private fun formatBytes(bytes: Long): String {
-    if (bytes < 0) return "Unknown size"
-    if (bytes < 1024) return "$bytes B"
-    if (bytes < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0)
-    if (bytes < 1024L * 1024L * 1024L) return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0))
-    return String.format(java.util.Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
-}
+}.getOrDefault(emptyList())

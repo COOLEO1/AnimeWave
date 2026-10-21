@@ -25,6 +25,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.viewinterop.AndroidView
 import java.io.ByteArrayInputStream
+import com.animewave.app.downloads.DownloadHelper
 
 /**
  * CartoonsArea source browser. Normal embedded HTML5 video playback and direct downloads
@@ -68,6 +70,18 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
         pending?.let { enqueueSourceDownload(it.url, it.userAgent, it.contentDisposition, it.mimeType) }
     }
 
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val pending = pendingDownload
+        pendingDownload = null
+        if (granted) {
+            pending?.let { startSourceDownload(it.url, it.userAgent, it.contentDisposition, it.mimeType) }
+        } else {
+            Toast.makeText(this, "Storage permission is needed for the public Downloads folder on Android 9 and older.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     private data class PendingDownload(
         val url: String,
         val userAgent: String?,
@@ -87,6 +101,14 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF090A12)) {
+                    BackHandler {
+                        if (customVideoView != null) {
+                            sourceChromeClient?.onHideCustomView()
+                        } else {
+                            val webView = sourceWebView
+                            if (webView?.canGoBack() == true) webView.goBack() else finish()
+                        }
+                    }
                     var query by remember { mutableStateOf(initialQuery) }
                     Column(Modifier.fillMaxSize()) {
                         Button(onClick = { finish() }, modifier = Modifier.padding(8.dp)) {
@@ -282,6 +304,15 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
     }
 
     private fun startSourceDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
+        val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT <= 28 &&
+            preferences.getString("download_storage", "phone") != "app" &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingDownload = PendingDownload(url, userAgent, contentDisposition, mimeType)
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -296,43 +327,29 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
         runCatching {
             val uri = Uri.parse(url)
             require(uri.scheme == "https" || uri.scheme == "http") { "Unsupported download URL" }
-            val guessedName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+            val title = URLUtil.guessFileName(url, contentDisposition, mimeType)
                 .replace(Regex("[^A-Za-z0-9._ -]"), "_")
                 .take(120)
-                .ifBlank { "anime_download" }
-            val request = DownloadManager.Request(uri)
-                .setTitle(guessedName)
-                .setDescription("AnimeWave episode download")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(false)
-            val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
-            if (preferences.getString("download_storage", "phone") == "app") {
-                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, guessedName)
+                .ifBlank { "anime_download.mp4" }
+            val cookie = CookieManager.getInstance().getCookie(url)
+            val result = DownloadHelper.enqueue(
+                context = this,
+                uri = uri,
+                title = title,
+                userAgent = userAgent,
+                referer = sourceWebView?.url,
+                cookie = cookie,
+                mimeType = mimeType
+            )
+            val message = if (result.alreadyQueued) {
+                "This URL is already in Downloads."
             } else {
-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$guessedName")
+                "Download queued. It can continue while you browse; check AnimeWave → Downloads."
             }
-            if (!userAgent.isNullOrBlank()) request.addRequestHeader("User-Agent", userAgent)
-            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let {
-                request.addRequestHeader("Cookie", it)
-            }
-            sourceWebView?.url?.let { request.addRequestHeader("Referer", it) }
-            if (!mimeType.isNullOrBlank()) request.setMimeType(mimeType)
-            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            manager.enqueue(request)
-            Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }.onFailure {
             Toast.makeText(this, "Download couldn't start: ${it.message ?: "unsupported link"}", Toast.LENGTH_LONG).show()
         }
-    }
-
-    override fun onBackPressed() {
-        if (customVideoView != null) {
-            sourceChromeClient?.onHideCustomView()
-            return
-        }
-        val webView = sourceWebView
-        if (webView?.canGoBack() == true) webView.goBack() else finish()
     }
 
     override fun onDestroy() {
@@ -355,8 +372,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
             val host = uri.host?.lowercase() ?: return@runCatching false
             uri.scheme == "https" &&
                 (host == "cartoonsarea.cc" || host.endsWith(".cartoonsarea.cc") ||
-                 host == "cartoonsarea.com" || host.endsWith(".cartoonsarea.com") ||
-                 host == "eng.cartoonsarea.cc" || host.endsWith(".cartoonsarea.com"))
+                 host == "cartoonsarea.com" || host.endsWith(".cartoonsarea.com"))
         }.getOrDefault(false)
 
         fun isDirectMediaUrl(value: String): Boolean = runCatching {
