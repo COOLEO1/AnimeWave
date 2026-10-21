@@ -72,7 +72,8 @@ internal fun NyaaSearchScreen() {
                 selected = null
                 scope.launch {
                     try {
-                        releases = withContext(Dispatchers.IO) { NyaaRepository().search(term) }\n                            .sortedWith(compareBy<NyaaRelease> { it.sizeBytes() ?: Long.MAX_VALUE }.thenByDescending { it.seeders ?: 0 })
+                        releases = withContext(Dispatchers.IO) { NyaaRepository().search(term) }
+                            .sortedWith(compareBy<NyaaRelease> { it.sizeBytes() ?: Long.MAX_VALUE }.thenByDescending { it.seeders ?: 0 })
                     } catch (e: Exception) {
                         releases = emptyList()
                         error = e.message ?: "Search failed. Check your connection and try again."
@@ -96,7 +97,8 @@ internal fun NyaaSearchScreen() {
                     loading = true
                     error = null
                     scope.launch {
-                        try { releases = withContext(Dispatchers.IO) { NyaaRepository().search(term) }\n                            .sortedWith(compareBy<NyaaRelease> { it.sizeBytes() ?: Long.MAX_VALUE }.thenByDescending { it.seeders ?: 0 }) }
+                        try { releases = withContext(Dispatchers.IO) { NyaaRepository().search(term) }
+                            .sortedWith(compareBy<NyaaRelease> { it.sizeBytes() ?: Long.MAX_VALUE }.thenByDescending { it.seeders ?: 0 }) }
                         catch (e: Exception) { error = e.message ?: "Search failed." }
                         finally { loading = false }
                     }
