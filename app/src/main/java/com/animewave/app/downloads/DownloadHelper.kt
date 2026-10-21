@@ -42,7 +42,7 @@ object DownloadHelper {
         val fileName = (fileNameOverride?.takeIf { it.isNotBlank() }
             ?: URLUtil.guessFileName(uri.toString(), null, mimeType))
             .substringAfterLast('/')
-            .substringAfterLast('\\\\')
+            .substringAfterLast('\\')
             .replace(Regex("[^A-Za-z0-9._ -]"), "_")
             .take(120)
             .ifBlank { safeTitle(title) + ".mp4" }
