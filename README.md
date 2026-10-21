@@ -44,3 +44,17 @@ Requires JDK 17 and Android SDK platform 35. Run `gradle assembleDebug` after in
 AnimeWave includes a native Nyaa RSS search screen for release metadata (title, size, seeders/leechers and date when exposed by the feed). Nyaa is an index; AnimeWave does not host the indexed media. Selecting a release opens a compatible external app with a magnet URI when the feed provides a valid info hash, otherwise it opens the release page. A torrent client is required for magnet downloads; Android DownloadManager does not handle BitTorrent. Use only content you are authorized to download.
 
 RSS fields can change or be unavailable. If Nyaa does not return an info hash in its RSS feed, the app intentionally falls back to the release page instead of inventing a magnet link.
+
+## Embedded BitTorrent downloads
+
+AnimeWave uses [libtorrent4j](https://github.com/aldenml/libtorrent4j) (MIT-licensed Java bindings for libtorrent) for in-app magnet downloads. The engine runs in a foreground data-sync service and persists magnet records so the queue can be restored when the service restarts.
+
+- Nyaa release cards can send a valid 40-character BitTorrent info hash directly to the embedded engine.
+- The Downloads tab shows progress, downloaded/total bytes, transfer rate, pause/resume controls, and removal from the torrent queue.
+- The existing Wi-Fi-only preference is applied to torrent transfers; torrents wait when Wi-Fi-only is enabled and Wi-Fi is unavailable.
+- Completed/local video files can be opened with the built-in AnimeWave player.
+- Torrent data is stored under the app-specific external Downloads directory (Android/data/com.animewave.app/files/Download/AnimeWaveTorrents) or app-internal storage if external app-specific storage is unavailable. Android scoped storage means no broad storage permission is requested.
+- Removing a torrent removes it from the engine queue but deliberately keeps its files. Delete unwanted files using Android's file manager or clear app storage.
+- Use this feature only for files you are authorized to download.
+
+The current libtorrent4j Android native artifacts require Android API 28 or newer, so the app's minSdk is now 28 (Android 9). The foreground service is declared as dataSync; Android OS battery policies and the Android 15 foreground-service time limit may still affect very long transfers. Build and test on a physical Android device before relying on background downloads.
