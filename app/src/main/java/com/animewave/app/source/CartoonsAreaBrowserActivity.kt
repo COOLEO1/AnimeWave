@@ -58,6 +58,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
     private var customVideoCallback: WebChromeClient.CustomViewCallback? = null
     private var sourceChromeClient: WebChromeClient? = null
     private var initialSearchAttempted = false
+    private var sourceAnimeFolder: String = ""
     private var pendingDownload: PendingDownload? = null
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -97,6 +98,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
             ?.takeIf(::isAllowedSourceUrl)
             ?: "https://www.cartoonsarea.cc/"
         val initialQuery = intent.getStringExtra(EXTRA_QUERY).orEmpty()
+        sourceAnimeFolder = initialQuery
 
         setContent {
             MaterialTheme {
@@ -356,7 +358,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                 cookie = cookie,
                 mimeType = mimeType,
                 fileNameOverride = title,
-                animeFolder = initialQuery.takeIf { it.isNotBlank() }
+                animeFolder = sourceAnimeFolder.takeIf { it.isNotBlank() }
             )
             val message = if (result.alreadyQueued) {
                 "This URL is already in Downloads."
