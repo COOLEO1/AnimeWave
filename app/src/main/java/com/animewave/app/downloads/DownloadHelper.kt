@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.os.Build
 import android.webkit.URLUtil
 import java.util.Locale
 
@@ -48,10 +49,17 @@ object DownloadHelper {
         val wifiOnly = preferences.getBoolean("wifi_only", false)
         if (wifiOnly) {
             request.setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                request.setAllowedOverMetered(false)
+            }
         } else {
             request.setAllowedNetworkTypes(
                 DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE
             )
+            // Explicitly permit mobile data (metered networks) when Wi-Fi-only is disabled.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                request.setAllowedOverMetered(true)
+            }
         }
 
         if (preferences.getString("download_storage", "phone") == "app") {
