@@ -12,6 +12,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import com.animewave.app.downloads.DownloadHelper
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -48,6 +49,15 @@ class PlayerActivity : ComponentActivity() {
         pendingDownload = null
         if (!granted) Toast.makeText(this, "Notifications are off; the download will still be attempted.", Toast.LENGTH_LONG).show()
         pending?.let { enqueueDownloadNow(it.first, it.second) }
+    }
+
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val pending = pendingDownload
+        pendingDownload = null
+        if (granted) pending?.let { enqueueDownload(it.first, it.second) }
+        else Toast.makeText(this, "Storage permission is needed for the public Downloads folder on Android 9 and older.", Toast.LENGTH_LONG).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,6 +127,15 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun enqueueDownload(uri: Uri, title: String) {
+        val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT <= 28 &&
+            preferences.getString("download_storage", "phone") != "app" &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingDownload = uri to title
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -129,34 +148,16 @@ class PlayerActivity : ComponentActivity() {
 
     private fun enqueueDownloadNow(uri: Uri, title: String) {
         runCatching {
-            require(uri.scheme == "https" || uri.scheme == "http") { "Only direct HTTP(S) media links can be downloaded" }
-            val fileName = safeFileName(title, uri)
-            val request = DownloadManager.Request(uri)
-                .setTitle(title)
-                .setDescription("AnimeWave episode download")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(false)
-            val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
-            if (preferences.getString("download_storage", "phone") == "app") {
-                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName)
+            val result = DownloadHelper.enqueue(this, uri, title)
+            val message = if (result.alreadyQueued) {
+                "This URL is already in Downloads."
             } else {
-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AnimeWave/$fileName")
+                "Download queued. Track progress in AnimeWave → Downloads."
             }
-            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            manager.enqueue(request)
-            Toast.makeText(this, "Download queued. Track progress in AnimeWave → Downloads.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }.onFailure {
             Toast.makeText(this, "Could not start download: ${it.message ?: "unsupported source"}", Toast.LENGTH_LONG).show()
         }
-    }
-
-    private fun safeFileName(title: String, uri: Uri): String {
-        val ext = uri.lastPathSegment?.substringAfterLast('.', "")?.lowercase(Locale.ROOT)
-            ?.takeIf { it.matches(Regex("[a-z0-9]{2,5}")) } ?: "mp4"
-        val base = title.replace(Regex("[^A-Za-z0-9._ -]"), "").trim()
-            .replace(Regex("\\s+"), "_").take(70).ifBlank { "anime_episode" }
-        return "$base.$ext"
     }
 
     override fun onDestroy() {
