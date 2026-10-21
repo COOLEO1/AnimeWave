@@ -116,7 +116,10 @@ private fun AnimeWaveApp() {
         }
     }
 
-    LaunchedEffect(Unit) {\n        catalog = decodeCatalog(preferences.getString("catalog_cache_json", null))\n        loadCatalog()\n    }
+    LaunchedEffect(Unit) {
+        catalog = decodeCatalog(preferences.getString("catalog_cache_json", null))
+        loadCatalog()
+    }
 
     BackHandler(enabled = selected != null) { selected = null }
 
