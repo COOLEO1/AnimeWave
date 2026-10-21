@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
@@ -173,6 +174,7 @@ private fun AnimeWaveApp(registerResumeRefresh: ((() -> Unit) -> Unit)) {
                         Triple("Discover", Icons.Default.Explore, "Discover"),
                         Triple("Saved", Icons.Default.Favorite, "Saved"),
                         Triple("Downloads", Icons.Default.Download, "Downloads"),
+                        Triple("Nyaa", Icons.Default.CloudDownload, "Nyaa"),
                         Triple("Settings", Icons.Default.Settings, "Settings")
                     ).forEach { (label, icon, route) ->
                         NavigationBarItem(
@@ -309,6 +311,7 @@ private fun AnimeWaveApp(registerResumeRefresh: ((() -> Unit) -> Unit)) {
                         if (saved.isEmpty()) EmptyState("Your list is waiting", "Tap the heart on an anime to save it.")
                         else AnimeRow(saved, ::openDetails)
                     }
+                    "Nyaa" -> NyaaSearchScreen()
                     "Downloads" -> {
                         DownloadsContent(
                             preferences = preferences,
