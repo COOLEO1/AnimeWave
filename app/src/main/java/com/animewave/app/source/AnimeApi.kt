@@ -16,23 +16,31 @@ class AnimeApi(private val tmdbKey: String = "") {
     private val kitsuBase = "https://kitsu.io/api/edge"
     private val hasTmdb = tmdbKey.isNotBlank()
 
-    fun trending(): List<AnimeItem> = if (hasTmdb) tmdbList(
+    fun trending(page: Int = 1): List<AnimeItem> = if (hasTmdb) tmdbList(
         "/discover/tv",
         mapOf(
             "with_genres" to "16",
             "with_origin_country" to "JP",
             "sort_by" to "popularity.desc",
-            "include_null_first_air_dates" to "false"
+            "include_null_first_air_dates" to "false",
+            "page" to page.coerceAtLeast(1).toString()
         )
-    ) else kitsuList("/anime?sort=-userCount&page%5Blimit%5D=24")
+    ) else kitsuList(
+        "/anime?sort=-userCount&page%5Blimit%5D=24&page%5Boffset%5D=${(page - 1).coerceAtLeast(0) * 24}"
+    )
 
-    fun search(query: String): List<AnimeItem> = if (hasTmdb) {
-        tmdbList("/search/tv", mapOf("query" to query, "include_adult" to "false"))
-            .filter { it.subtype?.contains("animation", ignoreCase = true) == true ||
-                it.title.isNotBlank() }
+    fun search(query: String, page: Int = 1): List<AnimeItem> = if (hasTmdb) {
+        tmdbList("/search/tv", mapOf(
+            "query" to query,
+            "include_adult" to "false",
+            "page" to page.coerceAtLeast(1).toString()
+        )).filter { it.subtype?.contains("animation", ignoreCase = true) == true ||
+            it.title.isNotBlank() }
     } else {
         val q = Uri.encode(query)
-        kitsuList("/anime?filter%5Btext%5D=$q&sort=-userCount&page%5Blimit%5D=24")
+        kitsuList(
+            "/anime?filter%5Btext%5D=$q&sort=-userCount&page%5Blimit%5D=24&page%5Boffset%5D=${(page - 1).coerceAtLeast(0) * 24}"
+        )
     }
 
     fun episodes(id: String): List<AnimeEpisode> {
