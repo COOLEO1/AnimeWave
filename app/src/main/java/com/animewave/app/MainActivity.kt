@@ -69,6 +69,8 @@ private fun AnimeWaveApp() {
     var tab by remember { mutableStateOf("Home") }
     var query by remember { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<AnimeItem>>(emptyList()) }
+    var catalogPage by remember { mutableIntStateOf(1) }
+    var hasMoreCatalog by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<AnimeItem?>(null) }
     var episodes by remember { mutableStateOf<List<AnimeEpisode>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -82,14 +84,20 @@ private fun AnimeWaveApp() {
     var draftTmdbKey by remember(tmdbKey) { mutableStateOf(tmdbKey) }
     val api = remember(tmdbKey) { AnimeApi(tmdbKey.trim()) }
 
-    fun loadCatalog(search: String = "") {
+    fun loadCatalog(search: String = "", page: Int = 1, append: Boolean = false) {
         scope.launch {
             loading = true
             error = null
             try {
-                catalog = withContext(Dispatchers.IO) {
-                    if (search.isBlank()) api.trending() else api.search(search)
+                val fetched = withContext(Dispatchers.IO) {
+                    if (search.isBlank()) api.trending(page) else api.search(search, page)
                 }
+                catalog = if (append) {
+                    (catalog + fetched).distinctBy { it.id }
+                } else fetched
+                catalogPage = page
+                hasMoreCatalog = fetched.size >= if (tmdbKey.isBlank()) 24 else 20
+                preferences.edit().putString("catalog_cache_json", encodeCatalog(catalog)).apply()
             } catch (e: Exception) {
                 error = e.message ?: "Could not load the anime catalog."
             } finally {
@@ -108,7 +116,7 @@ private fun AnimeWaveApp() {
         }
     }
 
-    LaunchedEffect(Unit) { loadCatalog() }
+    LaunchedEffect(Unit) {\n        catalog = decodeCatalog(preferences.getString("catalog_cache_json", null))\n        loadCatalog()\n    }
 
     BackHandler(enabled = selected != null) { selected = null }
 
@@ -284,7 +292,16 @@ private fun AnimeWaveApp() {
                                 Button(onClick = { loadCatalog(query.trim()) }) { Text("Try again") }
                             }
                             catalog.isEmpty() -> EmptyState("No anime found", "Try another title or spelling.")
-                            else -> AnimeRow(catalog, ::openDetails)
+                            else -> {
+                                AnimeRow(catalog, ::openDetails)
+                                if (hasMoreCatalog) {
+                                    TextButton(
+                                        onClick = { loadCatalog(query.trim(), catalogPage + 1, append = true) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !loading
+                                    ) { Text(if (loading) "Loading more…" else "Load more anime") }
+                                }
+                            }
                         }
                         Spacer(Modifier.height(24.dp))
                         if (tab == "Home") {
@@ -704,3 +721,42 @@ private fun posterRequest(url: String?, context: Context): ImageRequest =
         .placeholder(ColorDrawable(0xFF202334.toInt()))
         .error(ColorDrawable(0xFF392452.toInt()))
         .build()
+
+private fun encodeCatalog(items: List<AnimeItem>): String {
+    val array = org.json.JSONArray()
+    items.forEach { item ->
+        array.put(org.json.JSONObject()
+            .put("id", item.id)
+            .put("title", item.title)
+            .put("synopsis", item.synopsis)
+            .put("posterUrl", item.posterUrl ?: "")
+            .put("coverUrl", item.coverUrl ?: "")
+            .put("episodeCount", item.episodeCount ?: -1)
+            .put("year", item.year ?: "")
+            .put("subtype", item.subtype ?: "")
+            .put("averageRating", item.averageRating ?: "")
+        )
+    }
+    return array.toString()
+}
+
+private fun decodeCatalog(json: String?): List<AnimeItem> = runCatching {
+    val array = org.json.JSONArray(json.orEmpty())
+    (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = item.optString("id")
+        val title = item.optString("title")
+        if (id.isBlank() || title.isBlank()) return@mapNotNull null
+        AnimeItem(
+            id = id,
+            title = title,
+            synopsis = item.optString("synopsis"),
+            posterUrl = item.optString("posterUrl").takeIf { it.startsWith("https://") },
+            coverUrl = item.optString("coverUrl").takeIf { it.startsWith("https://") },
+            episodeCount = item.optInt("episodeCount", -1).takeIf { it > 0 },
+            year = item.optString("year").takeIf { it.isNotBlank() },
+            subtype = item.optString("subtype").takeIf { it.isNotBlank() },
+            averageRating = item.optString("averageRating").takeIf { it.isNotBlank() }
+        )
+    }
+}.getOrDefault(emptyList())
