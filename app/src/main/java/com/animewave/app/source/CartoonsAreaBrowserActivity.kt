@@ -178,7 +178,7 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                                     }
                                     webChromeClient = sourceChromeClient
                                     setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                                        startSourceDownload(url, userAgent, contentDisposition, mimeType)
+                                        confirmSourceDownload(url, userAgent, contentDisposition, mimeType)
                                     }
                                     webViewClient = object : WebViewClient() {
                                         override fun shouldOverrideUrlLoading(
@@ -303,6 +303,21 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
         }
     }
 
+    private fun confirmSourceDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
+        val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+            .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+            .take(120)
+            .ifBlank { "anime_episode.mp4" }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Download video file?")
+            .setMessage("File name: $fileName\\n\\nAnimeWave will download this file using your current network. Large video files may use mobile data.")
+            .setNegativeButton("CANCEL", null)
+            .setPositiveButton("DOWNLOAD") { _, _ ->
+                startSourceDownload(url, userAgent, contentDisposition, mimeType)
+            }
+            .show()
+    }
+
     private fun startSourceDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
         val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
         if (Build.VERSION.SDK_INT <= 28 &&
@@ -339,7 +354,8 @@ class CartoonsAreaBrowserActivity : ComponentActivity() {
                 userAgent = userAgent,
                 referer = sourceWebView?.url,
                 cookie = cookie,
-                mimeType = mimeType
+                mimeType = mimeType,
+                fileNameOverride = title
             )
             val message = if (result.alreadyQueued) {
                 "This URL is already in Downloads."
