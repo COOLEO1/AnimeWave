@@ -42,6 +42,7 @@ class TorrentEngineService : Service() {
     private var poller: ScheduledExecutorService? = null
     @Volatile private var session: SessionManager? = null
     private val appliedPause = ConcurrentHashMap<String, Boolean>()
+    private val startedHashes = ConcurrentHashMap.newKeySet<String>()
     private val lock = Any()
     private var records = mutableListOf<Record>()
     private var lastEngineError: String? = null
@@ -59,9 +60,8 @@ class TorrentEngineService : Service() {
                 session = engine
                 loadRecords()
                 records.toList().forEach { record ->
-                    runCatching {
-                        engine.download(record.magnet, downloadRoot(), TorrentFlags.SEQUENTIAL_DOWNLOAD)
-                    }.onFailure { lastEngineError = it.message ?: "Could not restore torrent" }
+                    runCatching { startRecord(record) }
+                        .onFailure { lastEngineError = it.message ?: "Could not restore torrent" }
                 }
                 poller = Executors.newSingleThreadScheduledExecutor()
                 poller?.scheduleWithFixedDelay({ updateSnapshots() }, 0, 1, TimeUnit.SECONDS)
@@ -106,8 +106,27 @@ class TorrentEngineService : Service() {
             records.add(Record(hash, magnet, title.ifBlank { "Torrent $hash" }))
             persistRecords()
         }
-        engine.download(magnet, downloadRoot(), TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        startRecord(synchronized(lock) { records.first { it.hash == hash } })
         lastEngineError = null
+    }
+
+    private fun startRecord(record: Record) {
+        val engine = session ?: throw IllegalStateException("Torrent engine is still starting. Try again.")
+        // Do not even announce/connect on mobile data when Wi-Fi-only is enabled.
+        if (wifiOnlyEnabled() && !isWifiConnected()) return
+        if (!startedHashes.add(record.hash)) return
+        runCatching {
+            val flags = if (record.userPaused) {
+                TorrentFlags.SEQUENTIAL_DOWNLOAD.or_(TorrentFlags.PAUSED)
+            } else {
+                TorrentFlags.SEQUENTIAL_DOWNLOAD
+            }
+            engine.download(record.magnet, downloadRoot(), flags)
+            if (record.userPaused) appliedPause[record.hash] = true
+        }.onFailure {
+            startedHashes.remove(record.hash)
+            throw it
+        }
     }
 
     private fun setPaused(hash: String, paused: Boolean) {
@@ -129,6 +148,7 @@ class TorrentEngineService : Service() {
             persistRecords()
         }
         appliedPause.remove(hash)
+        startedHashes.remove(hash)
         // Intentionally keep downloaded files; removing a torrent must not silently delete user data.
     }
 
@@ -180,6 +200,10 @@ class TorrentEngineService : Service() {
         val copy = synchronized(lock) { records.toList() }
         copy.forEach { record ->
             val waitingForWifi = wifiOnlyEnabled() && !isWifiConnected()
+            if (!waitingForWifi && record.hash !in startedHashes && engine != null) {
+                runCatching { startRecord(record) }
+                    .onFailure { lastEngineError = it.message ?: "Could not start torrent" }
+            }
             val handle = runCatching { engine?.find(Sha1Hash.parseHex(record.hash)) }.getOrNull()
             var progress = 0.0
             var downloaded = 0L
