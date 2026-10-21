@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -22,7 +23,8 @@ import kotlinx.coroutines.withContext
 
 private data class AnimeWaveDownload(
     val id: Long, val title: String, val status: Int,
-    val downloadedBytes: Long, val totalBytes: Long, val reason: Int
+    val downloadedBytes: Long, val totalBytes: Long, val reason: Int,
+    val animeFolder: String?
 )
 
 @Composable
@@ -35,6 +37,7 @@ internal fun DownloadsContent(
     var refreshToken by remember { mutableIntStateOf(0) }
     var downloads by remember { mutableStateOf<List<AnimeWaveDownload>>(emptyList()) }
     var loadingDownloads by remember { mutableStateOf(false) }
+    var expandedFolders by remember { mutableStateOf(setOf<String>()) }
 
     LaunchedEffect(downloads) {
         if (downloads.any {
@@ -67,12 +70,15 @@ internal fun DownloadsContent(
                         }
                         val titleIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TITLE)
                         val title = if (titleIndex >= 0) cursor.getString(titleIndex) ?: "Anime download" else "Anime download"
+                        val downloadId = longColumn(DownloadManager.COLUMN_ID)
+                        val folder = context.getSharedPreferences("animewave_download_library", Context.MODE_PRIVATE)
+                            .getString("anime_$downloadId", null)
                         found += AnimeWaveDownload(
-                            longColumn(DownloadManager.COLUMN_ID), title,
+                            downloadId, title,
                             intColumn(DownloadManager.COLUMN_STATUS),
                             longColumn(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
                             longColumn(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
-                            intColumn(DownloadManager.COLUMN_REASON)
+                            intColumn(DownloadManager.COLUMN_REASON), folder
                         )
                     }
                 }
@@ -127,7 +133,25 @@ internal fun DownloadsContent(
         } else if (downloads.isEmpty()) {
             EmptyState("Nothing downloaded yet", "Start a supported download from a source page or the player. Your downloads will appear here.")
         } else {
-            downloads.forEach { item ->
+            downloads.groupBy { it.animeFolder?.takeIf { name -> name.isNotBlank() } ?: "Other downloads" }
+                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                .forEach { (folderName, episodes) ->
+                    val expanded = folderName in expandedFolders
+                    Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                expandedFolders = if (expanded) expandedFolders - folderName else expandedFolders + folderName
+                            }.padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("📁", fontSize = 20.sp)
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text(folderName, fontWeight = FontWeight.Bold)
+                                Text(episodes.size.toString() + if (episodes.size == 1) " episode" else " episodes", color = Muted, fontSize = 11.sp)
+                            }
+                            Text(if (expanded) "⌄" else "›", fontSize = 22.sp, color = Muted)
+                        }
+                        if (expanded) episodes.forEach { item ->
                 val statusText = when (item.status) {
                     DownloadManager.STATUS_PENDING -> "Queued"
                     DownloadManager.STATUS_RUNNING -> "Downloading"
@@ -204,7 +228,9 @@ internal fun DownloadsContent(
                         }
                     }
                 }
-            }
+                        }
+                    }
+                }
         }
         Text("Notifications depend on Android notification settings. Only direct, accessible media files can be downloaded and played here.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
     }
