@@ -24,6 +24,7 @@ object DownloadHelper {
         cookie: String? = null,
         mimeType: String? = null,
         fileNameOverride: String? = null,
+        animeFolder: String? = null,
         bypassDuplicateCheck: Boolean = false
     ): EnqueueResult {
         require((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) {
@@ -79,7 +80,16 @@ object DownloadHelper {
         cookie?.takeIf { it.isNotBlank() }?.let { request.addRequestHeader("Cookie", it) }
         mimeType?.takeIf { it.isNotBlank() }?.let { request.setMimeType(it) }
 
-        return EnqueueResult(manager.enqueue(request), false)
+        val downloadId = manager.enqueue(request)
+        // Keep library metadata separate from the server's URL and filename so the UI
+        // can group episodes into anime folders even after the app is restarted.
+        if (downloadId >= 0L && !animeFolder.isNullOrBlank()) {
+            context.getSharedPreferences("animewave_download_library", Context.MODE_PRIVATE)
+                .edit()
+                .putString("anime_$downloadId", animeFolder.trim().take(100))
+                .apply()
+        }
+        return EnqueueResult(downloadId, false)
     }
 
     /**
