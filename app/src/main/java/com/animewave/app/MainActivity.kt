@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -39,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.animewave.app.source.AnimeApi
+import com.animewave.app.downloads.DownloadHelper
 import com.animewave.app.source.AnimeEpisode
 import com.animewave.app.source.AnimeItem
 import kotlinx.coroutines.Dispatchers
@@ -70,10 +72,10 @@ private fun AnimeWaveApp() {
     var loading by remember { mutableStateOf(true) }
     var detailLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var savedIds by remember { mutableStateOf(setOf<String>()) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("animewave_settings", android.content.Context.MODE_PRIVATE) }
+    var savedIds by remember { mutableStateOf(preferences.getStringSet("saved_anime_ids", emptySet())?.toSet() ?: emptySet()) }
     var tmdbKey by remember { mutableStateOf(preferences.getString("tmdb_api_key", "").orEmpty()) }
     var draftTmdbKey by remember(tmdbKey) { mutableStateOf(tmdbKey) }
     val api = remember(tmdbKey) { AnimeApi(tmdbKey.trim()) }
@@ -105,6 +107,8 @@ private fun AnimeWaveApp() {
     }
 
     LaunchedEffect(Unit) { loadCatalog() }
+
+    BackHandler(enabled = selected != null) { selected = null }
 
     MaterialTheme(colorScheme = darkColorScheme(
         background = Night, surface = Panel, surfaceVariant = Panel2,
@@ -182,8 +186,10 @@ private fun AnimeWaveApp() {
                         saved = selected!!.id in savedIds,
                         onBack = { selected = null },
                         onSave = {
-                            savedIds = if (selected!!.id in savedIds) savedIds - selected!!.id
-                                else savedIds + selected!!.id
+                            val id = selected!!.id
+                            val updated = if (id in savedIds) savedIds - id else savedIds + id
+                            savedIds = updated
+                            preferences.edit().putStringSet("saved_anime_ids", updated).apply()
                         },
                         onOpenSource = { sourceQuery ->
                             context.startActivity(
@@ -535,6 +541,19 @@ private fun DownloadsContent(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionHeading("OFFLINE LIBRARY", "Downloads")
         Text("Choose where new episodes are saved.", color = Muted, fontSize = 12.sp)
+        Row(
+            modifier = Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Wi-Fi only", fontWeight = FontWeight.SemiBold)
+                Text("Avoid mobile-data downloads", color = Muted, fontSize = 11.sp)
+            }
+            Switch(
+                checked = preferences.getBoolean("wifi_only", false),
+                onCheckedChange = { preferences.edit().putBoolean("wifi_only", it).apply() }
+            )
+        }
         Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(storageChoice == "phone", onClick = {
@@ -570,7 +589,7 @@ private fun DownloadsContent(
                     DownloadManager.STATUS_RUNNING -> "Downloading"
                     DownloadManager.STATUS_PAUSED -> "Paused"
                     DownloadManager.STATUS_SUCCESSFUL -> "Complete"
-                    DownloadManager.STATUS_FAILED -> "Failed (code ${item.reason})"
+                    DownloadManager.STATUS_FAILED -> "Failed • ${downloadErrorText(item.reason)}"
                     else -> "Checking status"
                 }
                 val progress = if (item.totalBytes > 0) (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
@@ -612,15 +631,32 @@ private fun DownloadsContent(
                             item.status == DownloadManager.STATUS_PAUSED ||
                             item.status == DownloadManager.STATUS_FAILED
                         ) {
-                            OutlinedButton(
-                                onClick = {
+                            if (item.status == DownloadManager.STATUS_FAILED) {
+                                Button(
+                                    onClick = {
+                                        runCatching { DownloadHelper.retry(context, item.id) }
+                                        refreshToken++
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Violet)
+                                ) { Text("Retry") }
+                                OutlinedButton(onClick = {
                                     runCatching {
                                         (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.id)
                                     }
                                     refreshToken++
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text(if (item.status == DownloadManager.STATUS_FAILED) "Dismiss failed download" else "Cancel download") }
+                                }) { Text("Remove") }
+                            } else {
+                                OutlinedButton(
+                                    onClick = {
+                                        runCatching {
+                                            (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.id)
+                                        }
+                                        refreshToken++
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Cancel download") }
+                            }
                         }
                     }
                 }
@@ -636,4 +672,18 @@ private fun formatBytes(bytes: Long): String {
     if (bytes < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0)
     if (bytes < 1024L * 1024L * 1024L) return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0))
     return String.format(java.util.Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+}
+
+private fun downloadErrorText(reason: Int): String = when (reason) {
+    DownloadManager.ERROR_CANNOT_RESUME -> "cannot resume"
+    DownloadManager.ERROR_DEVICE_NOT_FOUND -> "storage unavailable"
+    DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "file already exists"
+    DownloadManager.ERROR_FILE_ERROR -> "file or storage error"
+    DownloadManager.ERROR_HTTP_DATA_ERROR -> "network data error"
+    DownloadManager.ERROR_INSUFFICIENT_SPACE -> "not enough storage space"
+    DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "too many redirects"
+    DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "server rejected the request"
+    DownloadManager.ERROR_BLOCKED -> "blocked by device policy"
+    DownloadManager.ERROR_UNKNOWN -> "unknown download error"
+    else -> "network or source error"
 }
