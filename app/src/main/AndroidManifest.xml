@@ -11,6 +11,10 @@
         android:label="AnimeWave"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:supportsRtl="true">
+        <service
+            android:name=".downloads.TorrentEngineService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <activity
             android:name=".source.CartoonsAreaBrowserActivity"
             android:exported="false" />
