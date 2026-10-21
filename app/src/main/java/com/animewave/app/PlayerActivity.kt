@@ -76,7 +76,11 @@ class PlayerActivity : ComponentActivity() {
 
         val exoPlayer = ExoPlayer.Builder(this).build()
         player = exoPlayer
-        exoPlayer.setMediaItem(MediaItem.fromUri(uri))
+        val watchPreferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
+        val resumePosition = if (watchPreferences.getString("last_watched_url", "") == uri.toString()) {
+            watchPreferences.getLong("last_watched_position", 0L).coerceAtLeast(0L)
+        } else 0L
+        exoPlayer.setMediaItem(MediaItem.fromUri(uri), resumePosition)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
 
@@ -160,7 +164,34 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    private fun savePlaybackProgress() {
+        val currentPlayer = player ?: return
+        val preferences = getSharedPreferences("animewave_settings", Context.MODE_PRIVATE)
+        val duration = currentPlayer.duration
+        if (duration > 0 && currentPlayer.currentPosition >= duration - 3000L) {
+            preferences.edit()
+                .remove("last_watched_url")
+                .remove("last_watched_title")
+                .remove("last_watched_position")
+                .apply()
+            return
+        }
+        if (currentPlayer.currentPosition > 0L) {
+            preferences.edit()
+                .putString("last_watched_url", intent.getStringExtra(EXTRA_MEDIA_URL).orEmpty())
+                .putString("last_watched_title", intent.getStringExtra(EXTRA_TITLE).orEmpty())
+                .putLong("last_watched_position", currentPlayer.currentPosition)
+                .apply()
+        }
+    }
+
+    override fun onPause() {
+        savePlaybackProgress()
+        super.onPause()
+    }
+
     override fun onDestroy() {
+        savePlaybackProgress()
         player?.release()
         player = null
         super.onDestroy()
