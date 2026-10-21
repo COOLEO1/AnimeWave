@@ -712,7 +712,6 @@ private fun downloadErrorText(reason: Int): String = when (reason) {
     DownloadManager.ERROR_INSUFFICIENT_SPACE -> "not enough storage space"
     DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "too many redirects"
     DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "server rejected the request"
-    DownloadManager.ERROR_BLOCKED -> "blocked by device policy"
     DownloadManager.ERROR_UNKNOWN -> "unknown download error"
     else -> "network or source error"
 }
