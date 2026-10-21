@@ -16,7 +16,7 @@ data class NyaaRelease(
     /** Converts common Nyaa size strings (for example, 850.4 MiB or 1.2 GiB) to bytes. */
     fun sizeBytes(): Long? {
         val raw = size?.trim() ?: return null
-        val match = Regex("""(?i)^([0-9]+(?:[.,][0-9]+)?)\\s*(bytes?|b|kib|mib|gib|tib|kb|mb|gb|tb)$""")
+        val match = Regex("""(?i)^([0-9]+(?:[.,][0-9]+)?)\s*(bytes?|b|kib|mib|gib|tib|kb|mb|gb|tb)$""")
             .matchEntire(raw) ?: return null
         val amount = match.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
         val unit = match.groupValues[2].lowercase(Locale.ROOT)
