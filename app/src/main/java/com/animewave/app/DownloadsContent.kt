@@ -131,7 +131,7 @@ internal fun DownloadsContent(
                 val statusText = when (item.status) {
                     DownloadManager.STATUS_PENDING -> "Queued"
                     DownloadManager.STATUS_RUNNING -> "Downloading"
-                    DownloadManager.STATUS_PAUSED -> "Paused"
+                    DownloadManager.STATUS_PAUSED -> "Paused • ${pausedReasonText(item.reason)}"
                     DownloadManager.STATUS_SUCCESSFUL -> "Complete"
                     DownloadManager.STATUS_FAILED -> "Failed • ${downloadErrorText(item.reason)}"
                     else -> "Checking status"
@@ -216,6 +216,13 @@ private fun formatBytes(bytes: Long): String {
     if (bytes < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0)
     if (bytes < 1024L * 1024L * 1024L) return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0))
     return String.format(java.util.Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+}
+
+private fun pausedReasonText(reason: Int): String = when (reason) {
+    DownloadManager.PAUSED_WAITING_TO_RETRY -> "connection interrupted; Android will retry"
+    DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "waiting for an allowed network"
+    DownloadManager.PAUSED_QUEUED_FOR_WIFI -> "waiting for Wi-Fi; check Wi-Fi-only setting"
+    else -> "Android has paused the transfer (reason $reason)"
 }
 
 private fun downloadErrorText(reason: Int): String = when (reason) {
